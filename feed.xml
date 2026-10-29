@@ -1,0 +1,44 @@
+<?xml version="1.0" ?>
+<rss xmlns:ns0="http://www.itunes.com/dtd/podcast-1.0.dtd" version="2.0">
+  <channel>
+    <title>M5 Morning Brief</title>
+    <link>https://ronyoder31-maker.github.io/M5-Morning-Brief/feed.xml</link>
+    <description>M5 Morning Brief -- daily tech and AI news podcast hosted by Ronny Yoder. Covering the most important stories from The Verge, Ars Technica, TechCrunch, Engadget, Wired, 9to5Mac, MacRumors, Hacker News, and VentureBeat.</description>
+    <language>en-us</language>
+    <copyright>Copyright 2026 Ronny Yoder</copyright>
+    <pubDate>Thu, 29 Oct 2026 09:54:16 +0000</pubDate>
+    <lastBuildDate>Thu, 29 Oct 2026 09:54:16 +0000</lastBuildDate>
+    <generator>M5 Morning Brief (Hermes Agent)</generator>
+    <ns0:image href="https://ronyoder31-maker.github.io/M5-Morning-Brief/cover.jpg"/>
+    <ns0:type>episodic</ns0:type>
+    <ns0:author>Ronny Yoder</ns0:author>
+    <ns0:owner>
+      <ns0:name>Ronny Yoder</ns0:name>
+      <ns0:email>ronyoder31@gmail.com</ns0:email>
+    </ns0:owner>
+    <ns0:explicit>false</ns0:explicit>
+    <ns0:category text="Technology"/>
+    <item>
+      <title>M5 Morning Brief -- 2026-10-29</title>
+      <link>https://ronyoder31-maker.github.io/M5-Morning-Brief/feed.xml</link>
+      <description>M5 Morning Brief daily tech and AI news podcast for 2026-10-29. Covering top stories from The Verge, Ars Technica, TechCrunch, Engadget, Wired, 9to5Mac, MacRumors, Hacker News, and VentureBeat.</description>
+      <guid isPermaLink="true">https://ronyoder31-maker.github.io/M5-Morning-Brief/2026-10-29/</guid>
+      <pubDate>Thu, 29 Oct 2026 00:00:00 +0000</pubDate>
+      <enclosure url="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-10-29/episode_final.m4a" type="audio/x-m4a" length="7695460"/>
+      <ns0:duration>0:14:31</ns0:duration>
+      <ns0:explicit>false</ns0:explicit>
+      <ns0:title>M5 Morning Brief -- 2026-10-29</ns0:title>
+    </item>
+    <item>
+      <title>M5 Morning Brief -- 2026-10-29</title>
+      <link>https://ronyoder31-maker.github.io/M5-Morning-Brief/feed.xml</link>
+      <description>M5 Morning Brief daily tech and AI news podcast for 2026-10-29. Covering top stories from The Verge, Ars Technica, TechCrunch, Engadget, Wired, 9to5Mac, MacRumors, Hacker News, and VentureBeat.</description>
+      <guid isPermaLink="true">https://ronyoder31-maker.github.io/M5-Morning-Brief/2026-10-29/</guid>
+      <pubDate>Thu, 29 Oct 2026 09:31:16 +0000</pubDate>
+      <enclosure url="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-10-29/episode_final.m4a" type="audio/x-m4a" length="7695460"/>
+      <ns0:duration>14:31</ns0:duration>
+      <ns0:explicit>false</ns0:explicit>
+      <ns0:title>M5 Morning Brief -- 2026-10-29</ns0:title>
+    </item>
+  </channel>
+</rss>
