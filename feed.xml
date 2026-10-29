@@ -6,8 +6,8 @@
     <description>M5 Morning Brief -- daily tech and AI news podcast hosted by Ronny Yoder. Covering the most important stories from The Verge, Ars Technica, TechCrunch, Engadget, Wired, 9to5Mac, MacRumors, Hacker News, and VentureBeat.</description>
     <language>en-us</language>
     <copyright>Copyright 2026 Ronny Yoder</copyright>
-    <pubDate>Thu, 29 Oct 2026 09:54:16 +0000</pubDate>
-    <lastBuildDate>Thu, 29 Oct 2026 09:54:16 +0000</lastBuildDate>
+    <pubDate>Thu, 29 Oct 2026 11:04:19 +0000</pubDate>
+    <lastBuildDate>Thu, 29 Oct 2026 11:04:19 +0000</lastBuildDate>
     <generator>M5 Morning Brief (Hermes Agent)</generator>
     <itunes:image href="https://ronyoder31-maker.github.io/M5-Morning-Brief/cover.jpg"/>
     <itunes:type>episodic</itunes:type>
@@ -24,8 +24,8 @@
       <description>M5 Morning Brief daily tech and AI news podcast for 2026-10-29. Covering top stories from The Verge, Ars Technica, TechCrunch, Engadget, Wired, 9to5Mac, MacRumors, Hacker News, and VentureBeat.</description>
       <guid isPermaLink="true">https://ronyoder31-maker.github.io/M5-Morning-Brief/2026-10-29/</guid>
       <pubDate>Thu, 29 Oct 2026 00:00:00 +0000</pubDate>
-      <enclosure url="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-10-29/episode_final.m4a" type="audio/x-m4a" length="7695460"/>
-      <itunes:duration>0:14:31</itunes:duration>
+      <enclosure url="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-10-29/episode_final.m4a" type="audio/x-m4a" length="21120260"/>
+      <itunes:duration>0:39:58</itunes:duration>
       <itunes:explicit>false</itunes:explicit>
       <itunes:title>M5 Morning Brief -- 2026-10-29</itunes:title>
     </item>
@@ -34,9 +34,9 @@
       <link>https://ronyoder31-maker.github.io/M5-Morning-Brief/feed.xml</link>
       <description>M5 Morning Brief daily tech and AI news podcast for 2026-10-29. Covering top stories from The Verge, Ars Technica, TechCrunch, Engadget, Wired, 9to5Mac, MacRumors, Hacker News, and VentureBeat.</description>
       <guid isPermaLink="true">https://ronyoder31-maker.github.io/M5-Morning-Brief/2026-10-29/</guid>
-      <pubDate>Thu, 29 Oct 2026 09:31:16 +0000</pubDate>
-      <enclosure url="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-10-29/episode_final.m4a" type="audio/x-m4a" length="7695460"/>
-      <itunes:duration>14:31</itunes:duration>
+      <pubDate>Thu, 29 Oct 2026 10:36:29 +0000</pubDate>
+      <enclosure url="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-10-29/episode_final.m4a" type="audio/x-m4a" length="21120260"/>
+      <itunes:duration>39:58</itunes:duration>
       <itunes:explicit>false</itunes:explicit>
       <itunes:title>M5 Morning Brief -- 2026-10-29</itunes:title>
     </item>
