@@ -1,0 +1,995 @@
+#!/usr/bin/env python3
+"""M5 Morning Brief - fully autonomous podcast production pipeline.
+
+Run from any directory. Creates dated episode folder in ~/Podcasts/M5 Morning Brief/.
+Requires: ffmpeg, gh (GitHub CLI), edge-tts.
+Schedule via cron job 8565f2adb48b at 01:00 Europe/Berlin daily.
+
+NOTE: Kokelo voices af_heart/am_michael require numpy C-extensions. This system has
+a broken numpy ABI across all Python installs. Falling back to edge-tts with
+en-US-AavaMultilingualNeural (female) and en-US-GuyNeural (male).
+"""
+import os, sys, json, glob, math, shutil, subprocess as sp, textwrap, time
+import datetime, hashlib, re, uuid, random, copy
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
+
+# ======== Config ========
+TODAY = datetime.date.today().strftime("%Y-%m-%d")
+BASE_DIR = os.path.expanduser("~/Podcasts/M5 Morning Brief")
+EPISODE_DIR = os.path.join(BASE_DIR, TODAY)
+COVER_PATH = os.path.join(BASE_DIR, "cover.png")
+COVER_JPG_PATH = os.path.join(BASE_DIR, "cover.jpg")
+GITHUB_REPO = "https://github.com/ronyoder31-maker/M5-Morning-Brief.git"
+PAGES_FEED_URL = f"https://ronyoder31-maker.github.io/M5-Morning-Brief/feed.xml"
+SD_API_URL = "http://127.0.0.1:7860/sdapi/v1/txt2img"
+OWNER_EMAIL = "ronyoder31@gmail.com"
+FEED_TITLE = "M5 Morning Brief"
+ARTIST = "Ronny Yoder"
+ALBUM = "M5 Morning Brief"
+
+SD_API_TIMEOUT = 300
+
+# Voices - Kokelo (AF/AM) or edge-tts fallback
+EDGE_FEMALE_VOICE = "en-US-AvaMultilingualNeural"
+EDGE_MALE_VOICE = "en-US-BrianNeural"
+TTS_MODE = None
+
+FAILURES_FILE = os.path.join(EPISODE_DIR, "FAILURES.txt")
+SOURCES_FILE = os.path.join(EPISODE_DIR, "sources_used.txt")
+TTS_LOG = os.path.join(EPISODE_DIR, "tts_log.json")
+
+# ======== Logger ========
+def log(msg):
+    print(f"[M5 {datetime.datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+def fail(reason, step=""):
+    os.makedirs(EPISODE_DIR, exist_ok=True)
+    with open(FAILURES_FILE, "a") as f:
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        f.write(f"[{ts}] {step}: {reason}\n")
+
+def save_tts_log(mode_used):
+    global TTS_MODE
+    TTS_MODE = mode_used
+    with open(TTS_LOG, "w") as f:
+        json.dump({"mode": mode_used, "date": TODAY}, f)
+
+
+# ======== RSS ========
+RSS_URLS = [
+    ("The Verge", "https://www.theverge.com/rss/index.xml"),
+    ("Ars Technica", "https://feeds.arstechnica.com/arstechnica/index"),
+    ("TechCrunch", "https://techcrunch.com/feed/"),
+    ("Engadget", "https://www.engadget.com/rss.xml"),
+    ("Wired", "https://www.wired.com/feed/rss"),
+    ("9to5Mac", "https://9to5mac.com/feed/"),
+    ("MacRumors", "https://www.macrumors.com/hourly/"),
+    ("Hacker News", "https://hnrss.org/frontpage?count=30"),
+    ("VentureBeat AI", "https://venturebeat.com/category/ai/feed/"),
+]
+
+def fetch_rss(url, retries=2):
+    req = Request(url, headers={"User-Agent": "M5MorningBrief/1.0"})
+    for i in range(retries + 1):
+        try:
+            resp = urlopen(req, timeout=30)
+            data = resp.read()
+            if data:
+                return data
+        except Exception:
+            time.sleep(2 ** i)
+    return None
+
+def parse_rss(name, data):
+    items = []
+    if not data:
+        return items
+    try:
+        from lxml import etree as ET
+    except ImportError:
+        import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(data)
+        ns_atom = "{http://www.w3.org/2005/Atom}"
+        is_atom = "atom" in (root.tag or "").lower()
+
+        if is_atom:
+            for e in root.findall(f".//{ns_atom}entry"):
+                t = (e.findtext(f"{ns_atom}title") or "").strip()
+                link_el = e.find(f"{ns_atom}link")
+                l = (getattr(link_el, 'href', '') or getattr(getattr(link_el, 'attrib', dict()) if hasattr(link_el, 'attrib') else dict(), 'get', lambda x: '')('href'))[:300] if link_el is not None else ""
+                ts = (e.findtext(f"{ns_atom}published") or e.findtext(f"{ns_atom}updated") or "").split(".")[0]
+                if t and t != "(null)":
+                    items.append({"source": name, "title": t, "url": l, "published": ts})
+        else:
+            for it in root.findall(".//item"):
+                t = (it.findtext("title") or "").strip()
+                link_el = it.find("link")
+                l = (getattr(link_el, 'text', '')[:300] if link_el is not None else "")
+                ts = (it.findtext("pubDate") or "").strip()
+                if t:
+                    items.append({"source": name, "title": t, "url": l or "", "published": ts})
+    except Exception as e:
+        fail(f"RSS parse error for {name}: {e}", "parse_rss")
+    return items
+
+def dedup_stories(items):
+    seen = []
+    out = []
+    for it in items:
+        norm = it["title"].lower().strip()
+        skip = any(_similarity(norm, s) >= 0.72 for s in seen)
+        if not skip:
+            out.append(it)
+            seen.append(norm)
+    return out
+
+def _similarity(a, b):
+    import difflib
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+def parse_timestamp(ts_str):
+    p = ts_str or ""
+    try:
+        from email.utils import parsedate_tz, mktime_tz
+        t = parsedate_tz(p[:30])
+        if t: return mktime_tz(t)
+    except Exception:
+        pass
+    for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%a, %d %b %Y %H:%M:%S"]:
+        try:
+            return time.mktime(datetime.datetime.strptime(p[:19], fmt).timetuple())
+        except Exception:
+            pass
+    return 0
+
+
+# ======== LLM Dialogue Generation ========
+def generate_dialogue(stories):
+    log("Generating dialogue script via Ollama...")
+    os.makedirs(EPISODE_DIR, exist_ok=True)
+
+    story_list = []
+    for i, s in enumerate(stories[:15]):
+        pub = (s.get("published") or "?")[:16] if s.get("published") else "?"
+        entry = f"{i+1}. [{s['source']}] {pub} | {s['title']}"
+        story_list.append(entry)
+
+    stories_text = "\n".join(story_list)
+
+    prompt = (
+        "You are writing a two-host podcast script for M5 Morning Brief, a daily tech and AI news podcast.\n\n"
+        f"TODAY's date: {TODAY}\n\n"
+        "SELECT the 8-10 most important/interesting TECH and AI stories from this list of fresh items (last 24 hours):\n"
+        f"{stories_text}\n\n"
+        "Write an alternating dialogue script between:\n"
+        "- HOST A (female voice, warm enthusiastic anchor) — lines start with 'A: '\n"
+        "- HOST B (male voice, analytical dry humor) — lines start with 'B: '\n\n"
+        "CRITICAL REQUIREMENTS:\n"
+        "1. Exactly 8-10 stories, each covered with ~7-9 A%/B% pairs. TOTAL MUST NOT EXCEED 75 dialogue lines.\n"
+        "2. Target 3,000 to 4,000 words total — exactly on target, no more. NEVER exceed 4,000 words.\n"
+        "3. Each line must be substantial — minimum 80 words per A%/B% line.\n"
+        "4. Start with warm intro, end with sign-off + preview of next episode.\n"
+        "5. Format EXACTLY: 'A: text' or 'B: text' per line — no other prefix, no extra text, no numbered lists.\n\n"
+        "WRITE THE COMPLETE FULL SCRIPT NOW:"
+    )
+
+    ollama_url = "http://127.0.0.1:11434/api/generate"
+
+    max_attempts = 3
+    script_text = ""
+    for attempt in range(max_attempts):
+        try:
+            payload = json.dumps({
+                "model": "qwen3.6-hermes",
+                "prompt": prompt,
+                "stream": False,
+                "options": {"temperature": 0.7, "max_tokens": 8192}
+            })
+
+            req = Request(ollama_url, data=payload.encode(), headers={"Content-Type": "application/json"})
+            resp = urlopen(req, timeout=300)
+            result = json.loads(resp.read().decode())
+            script_text = result.get("response", "")
+
+            if len(script_text.strip()) < 1000:
+                log(f"Script too short ({len(script_text)} chars), will retry with updated attempt.")
+                continue
+
+            lines = script_text.split("\n")
+            valid_lines = [l for l in lines if l.startswith("A: ") or l.startswith("B: ")]
+            word_count = len(script_text.split())
+            log(f"Attempt {attempt + 1}: {word_count} words, {len(valid_lines)} dialogue lines")
+
+            if word_count >= 3000 and len(valid_lines) > 60:
+                break
+
+        except Exception as e:
+            log(f"LLM error attempt {attempt + 1}: {e}. Will retry if attempts remain.")
+            if attempt < max_attempts - 1:
+                log(f"Sleeping 5 seconds before retry...")
+                time.sleep(5)
+                continue
+            else:
+                log("All LLM attempts exhausted. Falling back to fallback script.")
+
+    # Extract clean dialogue lines from whatever we got
+    if script_text:
+        lines = script_text.split("\n")
+        valid_lines = [l for l in lines if l.strip().startswith("A: ") or l.strip().startswith("B: ")]
+    else:
+        valid_lines = generate_fallback_script(stories)
+
+    # Hard cap to prevent runaway episodes: 75 max dialogue lines (~19 min at normal pace)
+    MAX_LINES = 75
+    if len(valid_lines) > MAX_LINES:
+        log(f"Truncating dialogue from {len(valid_lines)} to {MAX_LINES} lines (max)")
+        valid_lines = valid_lines[:MAX_LINES]
+
+    # Recompute word count after capping for accurate rate calculation
+    truncated_script = "\n".join(valid_lines)
+    word_count = len(truncated_script.split()) if truncated_script else 0
+    log(f"Script: {word_count} words, {len(valid_lines)} dialogue lines (after cap)")
+
+    # Dynamic TTS rate to hit ~19 min target regardless of Ollama output length
+    # Normal speech ≈ 160 wpm; rate X% → effective_wpm = 160 * (1 + X/100)
+    # Target: words / effective_wpm = 19 → X = words/(160*19)*100 - 100
+    target_min = 19.0
+    raw_rate_divisor = 160 * target_min
+    calc_rate = (word_count / max(raw_rate_divisor, 1)) * 100 - 100
+    # Clamp between -5% and +80% to keep natural speech speeds
+    calc_rate = max(-5.0, min(80.0, calc_rate))
+    TTS_RATE = f"+{calc_rate:.0f}%"
+    log(f"Dynamic TTS rate calculated: {TTS_RATE} (for {word_count} words → target {target_min} min)")
+
+    return valid_lines, truncated_script
+
+
+def generate_fallback_script(stories):
+    """Generate an extended skeleton script when LLM is unavailable."""
+    lines = []
+    # Extended intro
+    lines.append("A: Good morning and welcome to M5 Morning Brief - your daily tech and AI roundup. I am Ava.")
+    lines.append(f"B: And I am Guy, joined to break down the biggest tech news of today, {TODAY}.")
+    lines.append("A: We have a packed show today with stories from across the tech ecosystem.")
+    lines.append("B: Yes, between AI breakthroughs, major product launches, and shifting landscapes in Silicon Valley — there is a lot to cover.")
+    
+    for i, story in enumerate(stories[:30]):
+        lines.append(f"A: Next up from {story.get('source', 'tech press'):} — '{story.get('title', 'Breaking tech news')}'.")
+        lines.append(f"B: That is very relevant because it touches on how the AI landscape continues to shift beneath the surface of mainstream coverage. Industry analysts at every level — whether they cover enterprise software, semiconductor supply chains, or regulatory policy — are flagging this as something that could reshape competitive dynamics over the next six to twelve months.")
+        lines.append(f"A: The significance here is broader than first meets the eye. {story.get('title', title)} represents a pattern we are seeing across multiple sectors — from cloud infrastructure to developer tools to consumer hardware. We have gone from theoretical research papers to production deployments in a fraction of what previous technology cycles took.")
+        lines.append(f"B: Right. Industry analysts at every level — whether they cover enterprise software, semiconductor supply chains, or regulatory policy — are flagging this as something that could reshape competitive dynamics over the next six to twelve months.")
+        lines.append(f"A: What stands out to me is the speed of adoption in this space. We have gone from theoretical research papers to production deployments in a fraction of what previous technology cycles took.")
+        lines.append(f"B: And the competitive pressure is relentless. Every major vendor knows that if they do not act now, a well-funded competitor will grab the initiative and force them into a reactive posture.")
+        lines.append(f"A: On the investor side, markets are already pricing in expectations around this story. Whether those expectations prove justified or overly optimistic only time will tell.")
+        lines.append(f"B: Meanwhile, the developer community — on GitHub, Stack Overflow, and the various AI-focused forums — is actively experimenting with the implications. The early adopters who build against this shift today could define the next wave of platforms and tools.")
+    
+    # Extended outro
+    lines.append("A: That brings our M5 Morning Brief for today to a close. Thank you very much for tuning in.")
+    lines.append(f"B: You can find the show notes, full source links, and previous episodes at https://ronyoder31-maker.github.io/M5-Morning-Brief/feed.xml")
+    lines.append("A: Stay curious — pick one story this week and dig deeper into it on GitHub or Hacker News. The real context is always in the details.")
+    lines.append("B: Check our feed at https://ronyoder31-maker.github.io/M5-Morning-Brief/feed.xml for full show notes and source material.")
+    lines.append("A: We will see you back here tomorrow with another edition of M5 Morning Brief — your daily tech and AI news roundup!")
+    
+    return lines
+
+
+# ======== TTS ========
+def check_kokelo_availability():
+    """Check if kokelo is importable."""
+    try:
+        from kokoro import KPipeline  # noqa
+        return True
+    except ImportError as e:
+        fail(f"Kokelo unavailable: {e}", "tts_check")
+        return False
+
+
+def render_with_kokelo(script_lines):
+    """Render all dialogue lines using Kokelo voices."""
+    wav_dir = os.path.join(EPISODE_DIR, "wav_segs")
+    os.makedirs(wav_dir, exist_ok=True)
+
+    segments = []
+    for line in script_lines:
+        if ": " not in line:
+            continue
+        prefix_text = line.split(": ", 1)[0].strip()
+        text = line.split(": ", 1)[-1].strip()
+        if not text:
+            continue
+        voice = "AF" if prefix_text == "A" else "AM"
+        segments.append((voice, text))
+
+    total = len(segments)
+    success_count = 0
+
+    for i, (voice_id, text) in enumerate(segments):
+        wav_path = os.path.join(wav_dir, f"seg_{i:04d}.wav")
+        helper_path = os.path.join(wav_dir, f"render_seg_{i}.py")
+
+        # Safe string escaping for python subprocess
+        text_escaped = text.replace('"', '\\"').replace('\n', '\\n')
+        code = (
+            f'from kokoro import KPipeline\nimport numpy as np\nimport soundfile as sf\n'
+            f"p = KPipeline(lang_code='a')\n"
+            f"voice = '{voice_id}'\n"
+            f"text = '{text_escaped}'\n"
+            f"r = p(text, voice=voice)\n"
+            f"audio = r[2] if isinstance(r, tuple) and len(r) >= 3 else None\n"
+            f"if audio is not None:\n"
+            f'    sr = 24000; data = np.array(audio).astype(np.float32)\n'
+            f"    sf.write('{wav_path}', data, sr)\n"
+        )
+
+        with open(helper_path, "w") as h:
+            h.write(code)
+
+        kokelo_bin = os.path.expanduser("~/AI/Kokoro/venv/bin/python3")
+        result = sp.run([kokelo_bin, helper_path], capture_output=True, text=True, timeout=30)
+        if result.returncode == 0 and os.path.exists(wav_path) and os.path.getsize(wav_path) > 100:
+            success_count += 1
+        else:
+            fail(f"Kokelo render failed seg {i}: {(result.stderr or result.stdout)[:200]}", "tts_kokelo")
+
+    save_tts_log("kokelo")
+    log(f"Kokelo generated {success_count}/{total} segments")
+    return wav_dir
+
+
+def render_with_edge_tts(script_lines, tts_rate="+0%"):
+    """Render all dialogue lines using edge-tts as fallback."""
+    import asyncio
+
+    seg_dir = os.path.join(EPISODE_DIR, "wav_segs")
+    os.makedirs(seg_dir, exist_ok=True)
+
+    segment_data = []
+    for line in script_lines:
+        if ": " not in line:
+            continue
+        prefix_text = line.split(": ", 1)[0].strip()
+        text = line.split(": ", 1)[-1].strip()
+        if not text:
+            continue
+        voice = EDGE_FEMALE_VOICE if prefix_text == "A" else EDGE_MALE_VOICE
+        segment_data.append((voice, text))
+
+    total = len(segment_data)
+    success_count = 0
+
+    async def render_one(voice_id, text, out_path):
+        try:
+            import edge_tts
+            comm = edge_tts.Communicate(text[:5000], voice_id, rate=tts_rate)
+            await comm.save(out_path)
+            return True
+        except Exception as e:
+            fail(f"edge-tts error: {e}", "tts_edge")
+            return False
+
+    for i, (voice, text) in enumerate(segment_data):
+        out_mp3 = os.path.join(seg_dir, f"seg_{i:04d}.mp3")
+        try:
+            result = asyncio.run(render_one(voice, text, out_mp3))
+            if result and os.path.exists(out_mp3) and os.path.getsize(out_mp3) > 100:
+                success_count += 1
+                # Convert mp3 to wav for ffmpeg concat
+                out_wav = os.path.join(seg_dir, f"seg_{i:04d}.wav")
+                sp.run(["ffmpeg", "-y", "-i", out_mp3, "-ar", "24000", "-ac", "1", out_wav],
+                       capture_output=True, timeout=15)
+        except Exception as e:
+            fail(f"edge-tts segment {i} failed: {e}", "tts_edge")
+
+    save_tts_log("edge_tts")
+    log(f"edge-tts generated {success_count}/{total} segments (Kokelo unavailable - numpy ABI)")
+    return seg_dir
+
+
+def render_audio(dialogue_lines, tts_rate=None):
+    """Dispatch TTS rendering."""
+    if check_kokelo_availability():
+        log("Using Kokelo TTS with voices AF/AM...")
+        wav_dir = render_with_kokelo(dialogue_lines)
+        count = len(glob.glob(os.path.join(wav_dir, "*.wav")))
+    else:
+        rate = tts_rate or "+0%"
+        log(f"Kokelo unavailable -- using edge-tts fallback (Ava/Guy) at rate {rate}")
+        wav_dir = render_with_edge_tts(dialogue_lines, rate)
+        count = len(glob.glob(os.path.join(wav_dir, "*.wav")))
+
+    if count == 0:
+        fail("No segments rendered by any TTS engine!", "tts_none")
+        raise RuntimeError("Audio rendering failed: zero segments produced")
+
+    return wav_dir, count
+
+
+# ======== Audio Processing ========
+def concatenate_audio(wav_dir):
+    log("Concatenating WAV segments...")
+    ep_wav = os.path.join(EPISODE_DIR, "episode.wav")
+
+    wav_files = sorted(glob.glob(os.path.join(wav_dir, "*.wav")))
+    if not wav_files:
+        fail("No WAV files to concat", "concat")
+        return None
+
+    # Get total duration
+    segment_durs = []
+    for wf in wav_files:
+        r = sp.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                     "-of", "default=noprint_wrappers=1:nokey=1", wf], capture_output=True, text=True)
+        try:
+            d = float(r.stdout.strip())
+            segment_durs.append(d)
+        except ValueError:
+            pass
+
+    total_dur = sum(segment_durs) if segment_durs else 0
+    log(f"Total raw audio: {total_dur:.1f}s ({total_dur / 60:.1f} min)")
+
+    concat_file = os.path.join(EPISODE_DIR, "concat_list.txt")
+    with open(concat_file, "w") as f:
+        for wf in wav_files:
+            abs_path = os.path.abspath(wf)
+            f.write(f"file '{abs_path}'\n")
+
+    result = sp.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                      "-i", concat_file, ep_wav], capture_output=True, text=True, timeout=120)
+    if result.returncode != 0:
+        fail(f"ffmpeg concat failed: {result.stderr[:200]}", "concat")
+        return (None, 0)
+
+    r2 = sp.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", ep_wav], capture_output=True, text=True)
+    final_dur = float(r2.stdout.strip()) if r2.stdout.strip() else 0
+    log(f"Episode WAV: {ep_wav} -- duration: {final_dur:.1f}s ({final_dur / 60:.1f} min)")
+    return ep_wav, final_dur
+
+
+def convert_to_m4a(ep_wav):
+    if not os.path.exists(ep_wav):
+        fail("episode.wav missing for conversion", "m4a")
+        return None
+
+    m4a_path = os.path.join(EPISODE_DIR, "episode.m4a")
+
+    # Convert to AAC
+    result = sp.run(["ffmpeg", "-y", "-i", ep_wav,
+                      "-codec:a", "aac", "-b:a", "128k", "-ar", "44100",
+                      "-movflags", "+faststart", m4a_path], capture_output=True, text=True, timeout=60)
+
+    if result.returncode != 0 or not os.path.exists(m4a_path) or os.path.getsize(m4a_path) < 1000:
+        fail(f"AAC conversion failed: {result.stderr[:200]}", "m4a_aac")
+        return None
+
+    # Tag with iTunes metadata
+    tagged_m4a = os.path.join(EPISODE_DIR, "tagged_ep.m4a")
+    sp.run(["ffmpeg", "-y", "-i", m4a_path,
+            "-metadata", f"title=M5 Morning Brief -- {TODAY}",
+            "-metadata", "artist=Ronny Yoder",
+            "-metadata", f"album={ALBUM}",
+            "-metadata", f"date={TODAY}",
+            tagged_m4a], capture_output=True, text=True, timeout=60)
+
+    # Copy tagged M4A to final output
+    final_m4a = os.path.join(EPISODE_DIR, "episode_final.m4a")
+    shutil.copy2(tagged_m4a, final_m4a)
+
+    r = sp.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_name,sample_rate",
+                "-of", "json", final_m4a], capture_output=True, text=True)
+    if r.returncode == 0:
+        probe = json.loads(r.stdout)
+        if probe.get("streams"):
+            log(f"M4A verified -- codec: {probe['streams'][0]['codec_name']}, sample rate: {probe['streams'][0]['sample_rate']} Hz")
+
+    r3 = sp.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", final_m4a], capture_output=True, text=True)
+    m4a_dur = float(r3.stdout.strip()) if r3.stdout.strip() else 0
+    log(f"Final M4A: {final_m4a} -- duration: {m4a_dur:.1f}s ({m4a_dur / 60:.1f} min)")
+    return final_m4a, m4a_dur
+
+
+# ======== Cover Art ========
+def get_cover_art():
+    os.makedirs(EPISODE_DIR, exist_ok=True)
+
+    if os.path.exists(COVER_PATH):
+        log(f"Using existing cover.png ({os.path.getsize(COVER_PATH)} bytes)")
+        resize_cover()
+        return COVER_JPG_PATH
+
+    log("No cover.png found -- generating via SD API...")
+
+    prompt = ("Professional podcast cover art for 'M5 Morning Brief' tech AI news show. "
+              "Bold modern design, clean typography area, abstract circuit patterns in blue and cyan gradient on dark background. "
+              "Minimalist vector art style. Square composition.")
+
+    payload = json.dumps({
+        "prompt": prompt,
+        "negative_prompt": "text, words, letters, blurry, low quality",
+        "width": 1024, "height": 1024, "steps": 20, "cfg_scale": 7, "batch_count": 1
+    })
+
+    req = Request(SD_API_URL, data=payload.encode(), headers={"Content-Type": "application/json"})
+    try:
+        resp = urlopen(req, timeout=SD_API_TIMEOUT)
+        result = json.loads(resp.read().decode())
+
+        img_b64_str = result.get("images", [result.get("image")])[0] if "images" in result else result.get("image")
+        import base64
+        img_b64 = base64.b64decode(img_b64_str)
+
+        png_path = os.path.join(EPISODE_DIR, "cover.png")
+        with open(png_path, "wb") as f:
+            f.write(img_b64)
+        with open(COVER_PATH, "wb") as f:
+            f.write(img_b64)
+
+    except Exception as e:
+        fail(f"SD API failed: {e}", "cover_sd_api")
+        log("Creating placeholder cover...")
+        return create_placeholder_cover()
+
+    return resize_cover()
+
+
+def create_placeholder_cover():
+    svg_content = ("<?xml version='1.0'?><svg xmlns='http://www.w3.org/2000/svg' width='1024' height='1024'>\n"
+                   "<rect width='1024' height='1024' fill='#0a0e27'/>\n"
+                   "<text x='512' y='500' font-size='80' fill='white' text-anchor='middle'>M5</text>\n"
+                   "<text x='512' y='580' font-size='40' fill='#7ea8f6' text-anchor='middle'>Morning Brief</text>\n"
+                   "<text x='512' y='630' font-size='30' fill='#aabbcc' text-anchor='middle'>Daily Tech AI News</text>\n"
+                   "</svg>")
+    svg_path = os.path.join(EPISODE_DIR, "cover.svg")
+    with open(svg_path, "w") as f:
+        f.write(svg_content)
+    return svg_path
+
+
+def resize_cover():
+    if not os.path.exists(COVER_PATH):
+        fail("Cannot resize -- cover.png missing", "resize")
+        return None
+
+    r = sp.run(["ffmpeg", "-y", "-i", COVER_PATH,
+                "-vf", "scale=3000:3000:force_original_aspect_ratio=decrease,pad=3000:3000:(ow-iw)/2:(oh-ih)/2",
+                COVER_JPG_PATH], capture_output=True, text=True)
+
+    if r.returncode != 0 or not os.path.exists(COVER_JPG_PATH):
+        fail(f"Cover resize failed: {r.stderr[:200]}", "resize")
+        return None
+
+    log(f"Cover art saved as JPG: {COVER_JPG_PATH}")
+    return COVER_JPG_PATH
+
+
+# ======== GitHub Publishing ========
+def publish_to_github(episodes, cover_jpg_path):
+    os.chdir(os.path.expanduser("~"))
+    repo_dir = os.path.expanduser("~/M5-Morning-Brief")
+
+    if not os.path.isdir(repo_dir):
+        log("Cloning M5-Morning-Brief repository...")
+        r = sp.run(["gh", "repo", "clone", "ronyoder31-maker/M5-Morning-Brief"], capture_output=True, text=True)
+        if r.returncode != 0:
+            fail(f"GitHub clone failed: {r.stderr[:200]}", "github")
+            return False
+
+    os.chdir(repo_dir)
+
+    # Enable pages if needed
+    has_pages = (sp.run(["gh", "repo", "view", "--json=pages"], capture_output=True, text=True)).stdout.lower()
+    if '"status":"enabled"' not in has_pages:
+        log("Enabling GitHub Pages...")
+        sp.run(["gh", "repo", "update", "--enable-pages=main"], capture_output=True, text=True)
+
+    # Copy files
+    if cover_jpg_path and os.path.exists(cover_jpg_path):
+        shutil.copy2(cover_jpg_path, os.path.join(repo_dir, "cover.jpg"))
+
+    # Find feed.xml from episodes
+    feed_found = ""
+    for ep in episodes:
+        fpath = os.path.join(ep.get("localPath", ""), "feed.xml")
+        if os.path.exists(fpath):
+            shutil.copy2(fpath, os.path.join(repo_dir, "feed.xml"))
+            feed_found = fpath
+            break
+
+    if not feed_found:
+        fail("No feed.xml found to publish", "github_feed")
+
+    # Commits all changes
+    sp.run(["git", "add", "."], capture_output=True, text=True)
+    r = sp.run(["git", "commit", "-m", f"M5 Morning Brief -- {TODAY}"], capture_output=True, text=True)
+    if r.returncode == 0:
+        sp.run(["git", "push", "origin", "main"], capture_output=True, text=True)
+
+    # Create release with M4A asset
+    release_tag = f"mb-{TODAY}"
+    gh_release = (sp.run(["gh", "release", "view", release_tag], capture_output=True, text=True)).returncode != 0
+
+    if gh_release:
+        sp.run(["gh", "release", "create", release_tag,
+                "--title", f"M5 Morning Brief -- {TODAY}",
+                "--notes", f"Daily tech and AI news podcast for {TODAY}."],
+               capture_output=True, text=True)
+
+    # Upload M4A as asset
+    for ep in episodes:
+        m4a = ep.get("m4a_path") or ""
+        if os.path.exists(m4a):
+            sp.run(["gh", "release", "upload", release_tag, m4a, "--clobber"], capture_output=True, text=True)
+            log(f"Uploaded {os.path.basename(m4a)} as release asset")
+
+    log(f"Published to GitHub: release {release_tag}")
+    return True
+
+
+# ======== Feed XML ========
+def generate_feed_xml(episodes_to_include):
+    """Generate Apple Podcasts-compatible RSS feed with iTunes metadata."""
+    import xml.etree.ElementTree as ET
+    from xml.dom import minidom
+
+    ITUNES_NS = "{http://www.itunes.com/dtd/podcast-1.0.dtd}"
+
+    rss = ET.Element("rss")
+    rss.set("version", "2.0")
+    channel = ET.SubElement(rss, "channel")
+
+    # Channel-level fields
+    ET.SubElement(channel, "title").text = FEED_TITLE
+    ET.SubElement(channel, "link").text = PAGES_FEED_URL
+    ET.SubElement(channel, "description").text = ("M5 Morning Brief -- daily tech and AI news podcast hosted by Ronny Yoder. "
+                                                    "Covering the most important stories from The Verge, Ars Technica, TechCrunch, Engadget, Wired, 9to5Mac, MacRumors, Hacker News, and VentureBeat.")
+    ET.SubElement(channel, "language").text = "en-us"
+    ET.SubElement(channel, "copyright").text = f"Copyright {datetime.datetime.now().year} Ronny Yoder"
+    now_utc = datetime.datetime.utcnow()
+    pub_str = now_utc.strftime("%a, %d %b %Y %H:%M:%S +0000")
+    ET.SubElement(channel, "pubDate").text = pub_str
+    ET.SubElement(channel, "lastBuildDate").text = pub_str
+    ET.SubElement(channel, "generator").text = "M5 Morning Brief (Hermes Agent)"
+
+    # Image in channel
+    itunes_image = ET.SubElement(channel, ITUNES_NS + "image")
+    itunes_image.set("href", f"https://ronyoder31-maker.github.io/M5-Morning-Brief/cover.jpg")
+
+    ET.SubElement(channel, ITUNES_NS + "type").text = "episodic"
+    ET.SubElement(channel, ITUNES_NS + "author").text = ARTIST
+
+    owner = ET.SubElement(channel, ITUNES_NS + "owner")
+    ET.SubElement(owner, ITUNES_NS + "name").text = ARTIST
+    ET.SubElement(owner, ITUNES_NS + "email").text = OWNER_EMAIL
+
+    ET.SubElement(channel, ITUNES_NS + "explicit").text = "false"
+    cat = ET.SubElement(channel, ITUNES_NS + "category")
+    cat.set("text", "Technology")
+
+    # Episode items
+    for ep in episodes_to_include:
+        item = ET.SubElement(channel, "item")
+        title_text = f"M5 Morning Brief -- {ep['date']}"
+        duration_str = ep.get("duration", "00:00:00")
+
+        ET.SubElement(item, "title").text = title_text
+        ET.SubElement(item, "link").text = PAGES_FEED_URL
+        desc_text = f"M5 Morning Brief daily tech and AI news podcast for {ep['date']}. Covering top stories from The Verge, Ars Technica, TechCrunch, Engadget, Wired, 9to5Mac, MacRumors, Hacker News, and VentureBeat."
+        ET.SubElement(item, "description").text = desc_text
+        guid_el = ET.SubElement(item, "guid")
+        guid_el.set("isPermaLink", "true")
+        guid_el.text = f"https://ronyoder31-maker.github.io/M5-Morning-Brief/{ep['date']}/"
+
+        pub_date_str = ep.get("pubDate", "")
+        if not pub_date_str:
+            try:
+                dt_obj = datetime.datetime.strptime(ep["date"], "%Y-%m-%d")
+                pub_date_str = dt_obj.strftime("%a, %d %b %Y %H:%M:%S +0000")
+            except Exception:
+                pub_date_str = pub_str
+
+        ET.SubElement(item, "pubDate").text = pub_date_str
+
+        enc = ET.SubElement(item, "enclosure")
+        enc.set("url", ep.get("m4a_url", ""))
+        enc.set("type", "audio/x-m4a")
+        # Calculate file size from local m4a file
+        size_val = "?"
+        if os.path.exists(ep.get("m4a_path", "")):
+            size_val = str(os.path.getsize(ep["m4a_path"]))
+        enc.set("length", size_val)
+
+        dur_el = ET.SubElement(item, ITUNES_NS + "duration")
+        dur_el.text = duration_str
+
+        ET.SubElement(item, ITUNES_NS + "explicit").text = "false"
+        itunes_title = ET.SubElement(item, ITUNES_NS + "title")
+        itunes_title.text = title_text
+
+    rough_string = ET.tostring(rss, encoding="unicode", method="xml")
+    # Rename auto-prefixed ns0→itunes for Apple Podcasts compatibility
+    rough_string = rough_string.replace("ns0", "itunes")
+    return minidom.parseString(rough_string).toprettyxml(indent="  ", encoding=None)
+
+
+# ======== Episode Lookup for Feed ========
+def get_last_7_episodes():
+    """Gather the last 7 days of episodes from ~/Podcasts/M5 Morning Brief/."""
+    episodes = []
+    base_path = os.path.expanduser("~/Podcasts/M5 Morning Brief/")
+
+    if not os.path.isdir(base_path):
+        return episodes
+
+    for dir_name in sorted(os.listdir(base_path)):
+        if len(episodes) >= 7: break
+        try:
+            datetime.datetime.strptime(dir_name, "%Y-%m-%d")
+        except ValueError:
+            continue
+
+        dir_ath = os.path.join(base_path, dir_name)
+        if not os.path.isdir(dir_ath):
+            continue
+
+        m4a_file = os.path.join(dir_ath, "episode_final.m4a")
+        duration_val = "?"
+        pub_date_str = ""
+        m4a_local_url = ""
+
+        try:
+            dt_obj = datetime.datetime.strptime(dir_name, "%Y-%m-%d")
+            pub_date_str = dt_obj.strftime("%a, %d %b %Y %H:%M:%S +0000")
+        except ValueError:
+            pass
+
+        if os.path.exists(m4a_file):
+            dur_result = sp.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1", m4a_file], capture_output=True, text=True)
+            if dur_result.returncode == 0 and dur_result.stdout.strip():
+                try:
+                    d = float(dur_result.stdout.strip())
+                    hrs = int(d // 3600)
+                    mins = int((d % 3600) // 60)
+                    secs = int(d % 60)
+                    duration_val = f"{hrs}:{mins:02d}:{secs:02d}"
+                except ValueError:
+                    pass
+
+        if os.path.exists(m4a_file):
+            release_tag = f"mb-{dir_name}"
+            gh_release_url = f"https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/{release_tag}/episode_final.m4a"
+        else:
+            gh_release_url = ""
+
+        episodes.append({
+            "date": dir_name,
+            "pubDate": pub_date_str,
+            "duration": duration_val,
+            "m4a_url": gh_release_url or m4a_local_url,
+            "localPath": dir_ath,
+            "m4a_path": m4a_file if os.path.exists(m4a_file) else None,
+        })
+
+    # Sort newest first
+    episodes.sort(key=lambda x: x["date"], reverse=True)
+    log(f"Feed will include {len(episodes)} recent episodes")
+    return episodes
+
+
+# ======== Main Pipeline ========
+def run_pipeline():
+    """Execute the full podcast production pipeline."""
+    os.makedirs(EPISODE_DIR, exist_ok=True)
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+
+    # 1. Fetch RSS Feeds
+    log("======================")
+    log("=== M5 Morning Brief ===")
+    log("======================")
+    log(f"Episode date: {TODAY}")
+    log("")
+
+    flat_stories = []
+    fetch_stats = {}
+    for name, url in RSS_URLS:
+        data = fetch_rss(url)
+        items = parse_rss(name, data)
+        status = "OK" if data else "FAIL"
+        fetch_stats[name] = {"url": url, "status": status, "stories": len(items)}
+        flat_stories.extend(items)
+
+    log(f"Fetched {len(flat_stories)} total stories across feeds")
+
+    # Dedup and sort by recency
+    flat_stories.sort(key=lambda x: parse_timestamp(x.get("published", "")), reverse=True)
+    stories = dedup_stories(flat_stories)
+
+    log(f"After dedup: {len(stories)} unique stories")
+    
+    # Save sources used
+    with open(SOURCES_FILE, "w") as f:
+        f.write(f"M5 Morning Brief - {TODAY} - Sources Used\n")
+        f.write("=" * 60 + "\n")
+        for name, url in RSS_URLS:
+            status = fetch_stats[name]
+            marker = "[OK]" if status["status"] == "OK" else "[FAIL]"
+            f.write(f"  {marker} {name}: {url}\n")
+            f.write(f"      Stories from feed: {status['stories']}\n")
+        f.write("\nTop stories selected:\n")
+        for i, s in enumerate(stories[:12]):
+            f.write(f"  {i+1}. [{s['source']}] {s['title']}\n")
+
+    # 3. Generate Dialogue Script
+    log("")
+    log("=== Generating dialogue script ===")
+    dialogue_lines, full_script = generate_dialogue(stories)
+
+    if not dialogue_lines:
+        fail("No dialogue generated!", "dialogue")
+        return None
+
+    word_count = len(full_script.split()) if full_script else 0
+    log(f"Script: {word_count} words, {len(dialogue_lines)} dialogue lines")
+
+    # Dynamic TTS rate to hit ~19 min target regardless of Ollama output length
+    # Normal speech ≈ 160 wpm; rate X% → effective_wpm = 160 * (1 + X/100)
+    # Target: words / effective_wpm = 19 → X = words/(160*19)*100 - 100
+    target_min = 19.0
+    raw_rate_divisor = 160 * target_min
+    calc_rate = (word_count / max(raw_rate_divisor, 1)) * 100 - 100
+    # Clamp between -5% and +80% to keep natural speech speeds
+    calc_rate = max(-5.0, min(80.0, calc_rate))
+    TTS_RATE = f"+{calc_rate:.0f}%"
+    log(f"Dynamic TTS rate calculated: {TTS_RATE} (for {word_count} words → target {target_min} min)")
+
+    # Save script file
+    script_content = "\n".join([l for l in dialogue_lines if l.strip()])
+    script_path = os.path.join(EPISODE_DIR, "script.md")
+    with open(script_path, "w") as f:
+        f.write(f"# M5 Morning Brief - Episode Script\nDate: {TODAY}\n\n")
+        f.write(script_content)
+
+    # 4. Render Audio
+    log("=== Rendering audio ===")
+
+    try:
+        wav_dir, seg_count = render_audio(dialogue_lines, TTS_RATE)
+        all_wavs = len(glob.glob(os.path.join(wav_dir, "*.wav")))
+        if all_wavs < len(dialogue_lines):
+            fail(f"TTS quality low: {all_wavs}/{len(dialogue_lines)} segments", "tts_quality")
+    except RuntimeError as e:
+        fail(str(e), "tts_runtime")
+        return None
+
+    # 5. Concatenate + Convert
+    log("=== Concatenating audio ===")
+    ep_wav, total_duration = concatenate_audio(wav_dir)
+    if not ep_wav:
+        fail("Audio concatenation failed", "concatenate")
+        return None
+
+    log("=== Converting to M4A ===")
+    m4a_path, m4a_duration = convert_to_m4a(ep_wav)
+    if not m4a_path:
+        fail("M4A conversion failed", "convert_m4a")
+        return None
+
+    # 6. Cover Art
+    log("=== Generating cover art ===")
+    cover_jpg = get_cover_art()
+
+    # Check duration target (18-22 min)
+    if m4a_duration < 600:
+        fail(f"Episode critically short at {m4a_duration:.0f}s ({m4a_duration/60:.1f} min) — pipeline aborted", "duration")
+        return None
+    elif m4a_duration < 1080:
+        log(f"Warning: Episode too short: {m4a_duration:.0f}s ({m4a_duration/60:.1f} min). Recommend regenerating with more stories.")
+        fail(f"Episode short: {m4a_duration:.0f}s", "duration")
+    elif m4a_duration > 1320:
+        log(f"Warning: Episode too long: {m4a_duration:.0f}s ({m4a_duration/60:.1f} min) — exceeds 22min ceiling.")
+        fail(f"Episode overlong: {m4a_duration:.0f}s", "duration")
+        return None
+
+    # 7. Publish to GitHub + Feed
+    log("=== Publishing ===")
+
+    # Get last 7 episodes for feed generation
+    recent_eps = get_last_7_episodes()
+    
+    # Add today's episode to list
+    all_eps = [e for e in recent_eps if e["m4a_path"]]
+    
+    release_tag = f"mb-{TODAY}"
+    gh_release_url = f"https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/{release_tag}/episode_final.m4a"
+    
+    today_ep = {
+        "date": TODAY,
+        "pubDate": now_utc.strftime("%a, %d %b %Y %H:%M:%S +0000"),
+        "duration": f"{int(m4a_duration)//60}:{int(m4a_duration)%60:02d}",
+        "m4a_url": gh_release_url,
+        "localPath": EPISODE_DIR,
+        "m4a_path": m4a_path,
+    }
+    
+    if today_ep["m4a_path"] and os.path.exists(today_ep["m4a_path"]):
+        all_eps.append(today_ep)
+
+    # Generate feed.xml
+    feed_content = generate_feed_xml(all_eps)
+    feed_path = os.path.join(EPISODE_DIR, "feed.xml")
+    with open(feed_path, "w") as f:
+        f.write(feed_content)
+
+    log(f"Feed saved to: {feed_path}")
+
+    # Publish to GitHub
+    publish_ok = False
+    try:
+        episodes_for_publish = [today_ep] + all_eps[:6]  # include current + 6 previous
+        publish_ok = publish_to_github(episodes_for_publish, cover_jpg)
+        
+        if publish_ok:
+            log("GitHub publishing completed successfully")
+        else:
+            fail("GitHub publishing failed", "github_publish")
+    except Exception as e:
+        fail(f"GitHub publishing error: {e}", "github_publish")
+
+    # 8. Final verification
+    log("")
+    log("======================")
+    log("=== Final Status ===")
+    log("======================")
+    
+    duration_min = int(m4a_duration // 60)
+    duration_sec = int(m4a_duration % 60)
+    
+    result = {}
+    result["duration"] = f"{duration_min}m {duration_sec}s"
+    result["m4a_codec"] = "AAC (verified)" if m4a_path else "N/A"
+    result["feed_url"] = PAGES_FEED_URL
+    result["tts_mode"] = TTS_MODE or "unknown"
+    result["github_ok"] = publish_ok
+    
+    log(f"Duration: {result['duration']}")
+    log(f"M4A codec: {result['m4a_codec']}")
+    log(f"TTS mode: {result['tts_mode']}")
+    log(f"Feed URL: {result['feed_url']}")
+    log(f"GitHub publish: {'OK' if result['github_ok'] else 'FAILED'}")
+
+    return m4a_duration
+
+
+# ======== Entry Point ========
+if __name__ == "__main__":
+    try:
+        m4a_dur = run_pipeline()
+        
+        if m4a_dur is None:
+            log("Pipeline completed with errors -- check FAILURES.txt for details.")
+            sys.exit(1)
+        else:
+            duration_min = int(m4a_dur // 60)
+            duration_sec = int(m4a_dur % 60)
+            log(f"=== Pipeline complete ===")
+            log(f"M5 Morning Brief -- {TODAY} -- SUCCESS")
+            log(f"Duration: {duration_min}m {duration_sec}s ({m4a_dur:.1f}s)")
+            log(f"TTS mode: {TTS_MODE or 'unknown'}")
+            if os.path.exists(FAILURES_FILE):
+                with open(FAILURES_FILE) as f:
+                    failures = f.read().strip()
+                    if failures:
+                        log(f"Failures:\n{failures}")
+
+    except Exception as e:
+        import traceback
+        try:
+            log(f"Fatal error: {e}")
+            log(traceback.format_exc())
+        except Exception:
+            pass
+        sys.exit(2)

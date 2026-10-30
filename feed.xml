@@ -1,44 +1,50 @@
-<?xml version="1.0" ?>
-<rss xmlns:itunes="http://www.itunes.com/dtd/podcast-1.0.dtd" version="2.0">
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:content="http://purl.org/rss/1.0/modules/content/"
+     xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"
+     version="2.0">
   <channel>
     <title>M5 Morning Brief</title>
-    <link>https://ronyoder31-maker.github.io/M5-Morning-Brief/feed.xml</link>
-    <description>M5 Morning Brief -- daily tech and AI news podcast hosted by Ronny Yoder. Covering the most important stories from The Verge, Ars Technica, TechCrunch, Engadget, Wired, 9to5Mac, MacRumors, Hacker News, and VentureBeat.</description>
+    <link>https://github.com/ronyoder31-maker/M5-Morning-Brief</link>
+    <description>Daily technology news deep-dives covering tech, AI, and innovation.</description>
     <language>en-us</language>
-    <copyright>Copyright 2026 Ronny Yoder</copyright>
-    <pubDate>Thu, 29 Oct 2026 11:04:19 +0000</pubDate>
-    <lastBuildDate>Thu, 29 Oct 2026 11:04:19 +0000</lastBuildDate>
-    <generator>M5 Morning Brief (Hermes Agent)</generator>
-    <itunes:image href="https://ronyoder31-maker.github.io/M5-Morning-Brief/cover.jpg"/>
-    <itunes:type>episodic</itunes:type>
+    <copyright>(C) 2026 Ronny Yoder</copyright>
+    <managingEditor>ronyoder31@gmail.com (Ronny Yoder)</managingEditor>
+    <ttl>60</ttl>
+    
+    <!-- iTunes feed-level tags -->
     <itunes:author>Ronny Yoder</itunes:author>
+    <itunes:type>episodic</itunes:type>
+    <itunes:summary>Daily technology news deep-dives covering tech, AI, and innovation.</itunes:summary>
     <itunes:owner>
       <itunes:name>Ronny Yoder</itunes:name>
       <itunes:email>ronyoder31@gmail.com</itunes:email>
     </itunes:owner>
-    <itunes:explicit>false</itunes:explicit>
-    <itunes:category text="Technology"/>
+    <itunes:image href="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-10-30/cover.jpg"/>
+    
+    <!-- Self link -->
+    <atom:link href="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/latest/feed.xml" 
+               rel="self" type="application/rss+xml" xmlns:atom="http://www.w3.org/2005/Atom"/>
+    
+    <!-- Episode entry -->
     <item>
-      <title>M5 Morning Brief -- 2026-10-29</title>
-      <link>https://ronyoder31-maker.github.io/M5-Morning-Brief/feed.xml</link>
-      <description>M5 Morning Brief daily tech and AI news podcast for 2026-10-29. Covering top stories from The Verge, Ars Technica, TechCrunch, Engadget, Wired, 9to5Mac, MacRumors, Hacker News, and VentureBeat.</description>
-      <guid isPermaLink="true">https://ronyoder31-maker.github.io/M5-Morning-Brief/2026-10-29/</guid>
-      <pubDate>Thu, 29 Oct 2026 00:00:00 +0000</pubDate>
-      <enclosure url="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-10-29/episode_final.m4a" type="audio/x-m4a" length="21120260"/>
-      <itunes:duration>0:39:58</itunes:duration>
-      <itunes:explicit>false</itunes:explicit>
-      <itunes:title>M5 Morning Brief -- 2026-10-29</itunes:title>
-    </item>
-    <item>
-      <title>M5 Morning Brief -- 2026-10-29</title>
-      <link>https://ronyoder31-maker.github.io/M5-Morning-Brief/feed.xml</link>
-      <description>M5 Morning Brief daily tech and AI news podcast for 2026-10-29. Covering top stories from The Verge, Ars Technica, TechCrunch, Engadget, Wired, 9to5Mac, MacRumors, Hacker News, and VentureBeat.</description>
-      <guid isPermaLink="true">https://ronyoder31-maker.github.io/M5-Morning-Brief/2026-10-29/</guid>
-      <pubDate>Thu, 29 Oct 2026 10:36:29 +0000</pubDate>
-      <enclosure url="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-10-29/episode_final.m4a" type="audio/x-m4a" length="21120260"/>
-      <itunes:duration>39:58</itunes:duration>
-      <itunes:explicit>false</itunes:explicit>
-      <itunes:title>M5 Morning Brief -- 2026-10-29</itunes:title>
+      <title>M5 Morning Brief - October 30, 2026</title>
+      <pubDate>Fri, 30 Oct 2026 18:00:00 +0000</pubDate>
+      <link>https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/tag/mb-2026-10-30</link>
+      <guid isPermaLink="false">mb-2026-10-30</guid>
+      <dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/">Ronny Yoder</dc:creator>
+      
+      <description>Today'"'"'s M5 Morning Brief covers: AWS targeting a trillion-dollar valuation, Amazon Prime Video revenue projections, Apple shipping 1.5M OLED MacBook Pros in 2027, Reddit logged-in mandate shift, Proton AI privacy overhaul, Meta Threads Friends testing, VRChat AI labeling decision, DOOM-to-Transformer benchmarks, Sony Mouthwashing film adaptation, geopolitical tech trade dynamics, and Binance market volatility.</description>
+      
+      <enclosure url="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-10-30/episode_final.m4a" length="13758260" type="audio/x-m4a"/>
+      
+      <!-- iTunes episode tags -->
+      <itunes:author>Ronny Yoder</itunes:author>
+      <itunes:subtitle>Daily tech news deep dive - Oct 30, 2026</itunes:subtitle>
+      <itunes:description>Today'"'"'s M5 Morning Brief covers: AWS targeting a trillion-dollar valuation, Amazon Prime Video revenue projections, Apple shipping 1.5M OLED MacBook Pros in 2027, Reddit logged-in mandate shift, Proton AI privacy overhaul, Meta Threads Friends testing, VRChat AI labeling decision, DOOM-to-Transformer benchmarks, Sony Mouthwashing film adaptation, geopolitical tech trade dynamics, and Binance market volatility.</itunes:description>
+      <itunes:Episode>19:0</itunes:Episode>
+      <itunes:duration>19:00</itunes:duration>
+      <itunes:image href="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-10-30/cover.jpg"/>
+      <content:encoded>&lt;![CDATA[Today'"'"'s M5 Morning Brief covers: AWS targeting a trillion-dollar valuation, Amazon Prime Video revenue projections, Apple shipping 1.5M OLED MacBook Pros in 2027, Reddit logged-in mandate shift, Proton AI privacy overhaul, Meta Threads Friends testing, VRChat AI labeling decision, DOOM-to-Transformer benchmarks, Sony Mouthwashing film adaptation, geopolitical tech trade dynamics, and Binance market volatility.]]&gt;</content:encoded>
     </item>
   </channel>
 </rss>
