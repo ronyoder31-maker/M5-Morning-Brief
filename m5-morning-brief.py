@@ -934,7 +934,8 @@ def run_pipeline():
     today_ep = {
         "date": TODAY,
         "pubDate": now_utc.strftime("%a, %d %b %Y %H:%M:%S +0000"),
-        "duration": f"{int(m4a_duration)//60}:{int(m4a_duration)%60:02d}",
+        "duration": f"{int(m4a_duration)//3600:02d}:{(int(m4a_duration)%3600)//60:02d}:{int(m4a_duration)%60:02d}",
+        "pub_rfc822": now_utc.strftime("%a, %d %b %Y %H:%M:%S +0000"),
         "m4a_url": gh_release_url,
         "localPath": EPISODE_DIR,
         "m4a_path": m4a_path,
