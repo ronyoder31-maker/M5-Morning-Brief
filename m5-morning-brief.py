@@ -27,6 +27,9 @@ OWNER_EMAIL = "ronyoder31@gmail.com"
 FEED_TITLE = "M5 Morning Brief"
 ARTIST = "Ronny Yoder"
 ALBUM = "M5 Morning Brief"
+# Feed download URLs (for Apple Podcasts syndication)
+FEED_DL_URL = "https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/latest/download/feed.xml"
+FEED_COVER_URL = "https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/latest/download/cover.jpg"
 
 SD_API_TIMEOUT = 300
 
@@ -631,154 +634,176 @@ def publish_to_github(episodes, cover_jpg_path):
 
 # ======== Feed XML ========
 def generate_feed_xml(episodes_to_include):
-    """Generate Apple Podcasts-compatible RSS feed with iTunes metadata."""
-    import xml.etree.ElementTree as ET
-    from xml.dom import minidom
+    """Generate Apple Podcasts-compatible RSS feed with iTunes metadata.
+    
+    Uses raw XML string output to avoid ElementTree namespace/CDATA issues.
+    Validates against Python xml.etree.ElementTree before returning.
+    """
+    ITUNES_NS = "http://www.itunes.com/dtds/podcast-1.0.dtd"
+    ATOM_NS = "http://www.w3.org/2005/Atom"
+    DC_NS_URI = "http://purl.org/dc/elements/1.1/"
+    CONTENT_NS_URI = "http://purl.org/rss/1.0/modules/content/"
+    
+    # Channel fields
+    channel_desc = (f"M5 Morning Brief -- daily tech and AI news podcast hosted by {ARTIST}. "
+                    f"Covering the most important tech and AI stories from The Verge, Ars Technica, TechCrunch, Engadget, Wired, MacRumors, Hacker News, VentureBeat, EFF, and other leading sources.")
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    newest_pub = episodes_to_include[0].get("pub_rfc822", "") if episodes_to_include else now_utc.strftime("%a, %d %b %Y %H:%M:%S +0000")
+    owner_name = ARTIST
+    owner_email = OWNER_EMAIL
+    
+    # Build XML as raw strings (avoids ET ns/CDATA bugs entirely)
+    feed_ns = f'xmlns:dc="{DC_NS_URI}" xmlns:itunes="{ITUNES_NS}" xmlns:atom="{ATOM_NS}" xmlns:content="{CONTENT_NS_URI}"'
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        f'<rss {feed_ns} version="2.0">',
+        '  <channel>',
+        f'    <title>{FEED_TITLE}</title>',
+        f'    <link>{PAGES_FEED_URL}</link>',
+        f'    <description>{channel_desc}</description>',
+        '    <language>en-us</language>',
+        f'    <copyright>(C) {now_utc.year} {owner_name}</copyright>',
+        f'    <pubDate>{newest_pub}</pubDate>',
+        f'    <lastBuildDate>{newest_pub}</lastBuildDate>',
+        '    <generator>M5 Morning Brief (Hermes Agent)</generator>',
+        '    <ttl>60</ttl>',
+        f'    <itunes:image href="{FEED_COVER_URL}"/>',
+        f'    <itunes:author>{owner_name}</itunes:author>',
+        '    <itunes:type>episodic</itunes:type>',
+        f'    <itunes:summary>{channel_desc}</itunes:summary>',
+        '    <itunes:owner>',
+        f'      <itunes:name>{owner_name}</itunes:name>',
+        f'      <itunes:email>{owner_email}</itunes:email>',
+        '    </itunes:owner>',
+        '    <itunes:explicit>false</itunes:explicit>',
+        '    <itunes:category text="Technology"/>',
+        # atom:link rel="self" with exact stable download URL (FIX 1) 
+        f'    <atom:link href="{FEED_DL_URL}" rel="self" type="application/rss+xml"/>',
+    ]
+    
+    for idx, ep in enumerate(episodes_to_include):
+        ep_date = ep["date"]
+        title_text = f"M5 Morning Brief - {ep['date']}"
+        duration_str = ep.get("duration", "?")  # HH:MM:SS from ffprobe
+        
+        lines += [
+            '    <item>',
+            f'      <title>{title_text}</title>',
+            f'      <link>https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/tag/{ep.get("tag", "")}</link>',
+            f'      <guid isPermaLink="false">{ep.get("tag", ep_date)}</guid>',
+            '      <dc:creator>Ronny Yoder</dc:creator>',
+            f'      <pubDate>{ep.get("pub_rfc822", newest_pub)}</pubDate>',
+            # Plain Python string — no shell quoting artifacts (FIX 4)
+            f'      <description>M5 Morning Brief daily tech and AI news for {ep_date}.</description>',
+            f'      <enclosure url="{ep.get("m4a_url", "")}" type="audio/m4a" length="{ep.get("file_size", "?")}"/>',
+            f'      <itunes:duration>{duration_str}</itunes:duration>',  # HH:MM:SS only (FIX 5)
+            '      <itunes:explicit>false</itunes:explicit>',
+            '      <itunes:season>1</itunes:season>',
+            f'      <itunes:episode>{idx + 1}</itunes:episode>',
+            f'      <itunes:title>{title_text}</itunes:title>',
+            # Real <![CDATA[ ... ]]> block (FIX 6)
+            f'      <content:encoded><![CDATA[M5 Morning Brief daily tech and AI news for {ep_date} - Deep-dives into tech, AI, and innovation.]]></content:encoded>',
+            '    </item>',
+        ]
+    
+    lines += ['  </channel>', '</rss>']
+    raw_xml = "\n".join(lines) + "\n"
+    
+    # FIX 7: Validate with Python XML parser before returning
+    try:
+        import xml.etree.ElementTree as ET
+        ET.fromstring(raw_xml.encode("utf-8"))
+    except Exception as e:
+        log(f"FATAL: Feed XML validation failed — {e}")
+        raise
+    
+    return raw_xml
 
-    ITUNES_NS = "{http://www.itunes.com/dtd/podcast-1.0.dtd}"
 
-    rss = ET.Element("rss")
-    rss.set("version", "2.0")
-    channel = ET.SubElement(rss, "channel")
-
-    # Channel-level fields
-    ET.SubElement(channel, "title").text = FEED_TITLE
-    ET.SubElement(channel, "link").text = PAGES_FEED_URL
-    ET.SubElement(channel, "description").text = ("M5 Morning Brief -- daily tech and AI news podcast hosted by Ronny Yoder. "
-                                                    "Covering the most important stories from The Verge, Ars Technica, TechCrunch, Engadget, Wired, 9to5Mac, MacRumors, Hacker News, and VentureBeat.")
-    ET.SubElement(channel, "language").text = "en-us"
-    ET.SubElement(channel, "copyright").text = f"Copyright {datetime.datetime.now().year} Ronny Yoder"
-    now_utc = datetime.datetime.utcnow()
-    pub_str = now_utc.strftime("%a, %d %b %Y %H:%M:%S +0000")
-    ET.SubElement(channel, "pubDate").text = pub_str
-    ET.SubElement(channel, "lastBuildDate").text = pub_str
-    ET.SubElement(channel, "generator").text = "M5 Morning Brief (Hermes Agent)"
-
-    # Image in channel
-    itunes_image = ET.SubElement(channel, ITUNES_NS + "image")
-    itunes_image.set("href", f"https://ronyoder31-maker.github.io/M5-Morning-Brief/cover.jpg")
-
-    ET.SubElement(channel, ITUNES_NS + "type").text = "episodic"
-    ET.SubElement(channel, ITUNES_NS + "author").text = ARTIST
-
-    owner = ET.SubElement(channel, ITUNES_NS + "owner")
-    ET.SubElement(owner, ITUNES_NS + "name").text = ARTIST
-    ET.SubElement(owner, ITUNES_NS + "email").text = OWNER_EMAIL
-
-    ET.SubElement(channel, ITUNES_NS + "explicit").text = "false"
-    cat = ET.SubElement(channel, ITUNES_NS + "category")
-    cat.set("text", "Technology")
-
-    # Episode items
-    for ep in episodes_to_include:
-        item = ET.SubElement(channel, "item")
-        title_text = f"M5 Morning Brief -- {ep['date']}"
-        duration_str = ep.get("duration", "00:00:00")
-
-        ET.SubElement(item, "title").text = title_text
-        ET.SubElement(item, "link").text = PAGES_FEED_URL
-        desc_text = f"M5 Morning Brief daily tech and AI news podcast for {ep['date']}. Covering top stories from The Verge, Ars Technica, TechCrunch, Engadget, Wired, 9to5Mac, MacRumors, Hacker News, and VentureBeat."
-        ET.SubElement(item, "description").text = desc_text
-        guid_el = ET.SubElement(item, "guid")
-        guid_el.set("isPermaLink", "true")
-        guid_el.text = f"https://ronyoder31-maker.github.io/M5-Morning-Brief/{ep['date']}/"
-
-        pub_date_str = ep.get("pubDate", "")
-        if not pub_date_str:
-            try:
-                dt_obj = datetime.datetime.strptime(ep["date"], "%Y-%m-%d")
-                pub_date_str = dt_obj.strftime("%a, %d %b %Y %H:%M:%S +0000")
-            except Exception:
-                pub_date_str = pub_str
-
-        ET.SubElement(item, "pubDate").text = pub_date_str
-
-        enc = ET.SubElement(item, "enclosure")
-        enc.set("url", ep.get("m4a_url", ""))
-        enc.set("type", "audio/x-m4a")
-        # Calculate file size from local m4a file
-        size_val = "?"
-        if os.path.exists(ep.get("m4a_path", "")):
-            size_val = str(os.path.getsize(ep["m4a_path"]))
-        enc.set("length", size_val)
-
-        dur_el = ET.SubElement(item, ITUNES_NS + "duration")
-        dur_el.text = duration_str
-
-        ET.SubElement(item, ITUNES_NS + "explicit").text = "false"
-        itunes_title = ET.SubElement(item, ITUNES_NS + "title")
-        itunes_title.text = title_text
-
-    rough_string = ET.tostring(rss, encoding="unicode", method="xml")
-    # Rename auto-prefixed ns0→itunes for Apple Podcasts compatibility
-    rough_string = rough_string.replace("ns0", "itunes")
-    return minidom.parseString(rough_string).toprettyxml(indent="  ", encoding=None)
-
-
-# ======== Episode Lookup for Feed ========
 def get_last_7_episodes():
-    """Gather the last 7 days of episodes from ~/Podcasts/M5 Morning Brief/."""
+    """Fetch last 7 days of episodes from GitHub releases (back catalog)."""
+    import subprocess as sp, json
+    
+    gh_cmd = ["gh", "release", "list", "--limit", "20"]
+    r = sp.run(gh_cmd, capture_output=True, text=True)
+    
+    if r.returncode != 0 or not r.stdout.strip():
+        log("WARNING: No GitHub releases found; empty feed")
+        return []
+    
+    cutoff_date = datetime.datetime.now(datetime.timezone.utc).date() - datetime.timedelta(days=7)
     episodes = []
-    base_path = os.path.expanduser("~/Podcasts/M5 Morning Brief/")
-
-    if not os.path.isdir(base_path):
-        return episodes
-
-    for dir_name in sorted(os.listdir(base_path)):
-        if len(episodes) >= 7: break
+    
+    for line in r.stdout.strip().split("\n"):
+        if not line.strip(): continue
+        parts = line.strip().split("\t")
+        if len(parts) < 4: continue
+        
+        tag = parts[2]           # Column 2 = release tag (e.g. mb-2026-10-30)
+        raw_published = parts[3] # Column 3 = ISO datetime
+        
+        ep_date = tag.replace("mb-", "")
         try:
-            datetime.datetime.strptime(dir_name, "%Y-%m-%d")
+            ep_dt = datetime.datetime.strptime(ep_date, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
         except ValueError:
             continue
-
-        dir_ath = os.path.join(base_path, dir_name)
-        if not os.path.isdir(dir_ath):
+        
+        # Only include within 7-day window (FIX 2: back catalog)
+        if ep_dt.date() < cutoff_date:
             continue
-
-        m4a_file = os.path.join(dir_ath, "episode_final.m4a")
-        duration_val = "?"
-        pub_date_str = ""
-        m4a_local_url = ""
-
+        
         try:
-            dt_obj = datetime.datetime.strptime(dir_name, "%Y-%m-%d")
-            pub_date_str = dt_obj.strftime("%a, %d %b %Y %H:%M:%S +0000")
+            pub_dt = datetime.datetime.fromisoformat(raw_published.replace("Z", "+00:00")).replace(tzinfo=datetime.timezone.utc)
         except ValueError:
-            pass
-
-        if os.path.exists(m4a_file):
-            dur_result = sp.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                    "-of", "default=noprint_wrappers=1:nokey=1", m4a_file], capture_output=True, text=True)
-            if dur_result.returncode == 0 and dur_result.stdout.strip():
+            pub_dt = ep_dt
+        
+        # Get enclosure URL + size from GitHub release assets
+        m4a_url = f"https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/{tag}/episode_final.m4a"
+        file_size = ""
+        av_r = sp.run(["gh", "release", "view", tag, "--json", "assets"], capture_output=True, text=True)
+        if av_r.returncode == 0:
+            try:
+                for a in json.loads(av_r.stdout).get("assets", []):
+                    if "episode_final.m4a" in a.get("name", ""):
+                        m4a_url = a["browser_download_url"]
+                        file_size = str(a["size"])
+            except (json.JSONDecodeError, KeyError):
+                pass
+        
+        pub_rfc822 = pub_dt.strftime("%a, %d %b %Y %H:%M:%S +0000")  # RFC 822 (FIX 3)
+        
+        episodes.append({
+            "tag": tag,
+            "date": ep_date,
+            "pub_rfc822": pub_rfc822,
+            "ep_dt": ep_dt,
+            "title": f"M5 Morning Brief - {ep_dt.strftime('%B %d, %Y')}",
+            "m4a_url": m4a_url,
+            "file_size": file_size if file_size else "?",
+        })
+    
+    # Sort by actual datetime (not string) newest-first
+    episodes.sort(key=lambda e: e["ep_dt"], reverse=True)
+    
+    # Compute duration from local audio files via ffprobe
+    for ep in episodes:
+        local_m4a = os.path.expanduser(f"~/Podcasts/M5 Morning Brief/{ep['date']}/episode_final.m4a")
+        if os.path.exists(local_m4a):
+            dur_out = sp.run(["ffprobe", "-v", "error", "-show_entries",
+                    "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", local_m4a],
+                    capture_output=True, text=True)
+            if dur_out.returncode == 0 and dur_out.stdout.strip():
                 try:
-                    d = float(dur_result.stdout.strip())
-                    hrs = int(d // 3600)
-                    mins = int((d % 3600) // 60)
-                    secs = int(d % 60)
-                    duration_val = f"{hrs}:{mins:02d}:{secs:02d}"
+                    secs = float(dur_out.stdout.strip())
+                    h = int(secs // 3600)
+                    m = int((secs % 3600) // 60)
+                    s = int(secs % 60)
+                    ep["duration"] = f"{h:02d}:{m:02d}:{s:02d}"  # HH:MM:SS (FIX 5)
                 except ValueError:
                     pass
-
-        if os.path.exists(m4a_file):
-            release_tag = f"mb-{dir_name}"
-            gh_release_url = f"https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/{release_tag}/episode_final.m4a"
-        else:
-            gh_release_url = ""
-
-        episodes.append({
-            "date": dir_name,
-            "pubDate": pub_date_str,
-            "duration": duration_val,
-            "m4a_url": gh_release_url or m4a_local_url,
-            "localPath": dir_ath,
-            "m4a_path": m4a_file if os.path.exists(m4a_file) else None,
-        })
-
-    # Sort newest first
-    episodes.sort(key=lambda x: x["date"], reverse=True)
-    log(f"Feed will include {len(episodes)} recent episodes")
+    
+    log(f"Feed will include {len(episodes)} recent episodes from GitHub releases")
     return episodes
-
 
 # ======== Main Pipeline ========
 def run_pipeline():
