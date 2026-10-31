@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """M5 Morning Brief - fully autonomous podcast production pipeline.
 
-Run from any directory. Creates dated episode folder in ~/Podcasts/M5 Morning Brief/.
-Requires: ffmpeg, gh (GitHub CLI), edge-tts.
+Run from ~/Podcasts/M5 Morning Brief/<date> after episode creation.
 Schedule via cron job 8565f2adb48b at 01:00 Europe/Berlin daily.
 
-NOTE: Kokelo voices af_heart/am_michael require numpy C-extensions. This system has
-a broken numpy ABI across all Python installs. Falling back to edge-tts with
-en-US-AavaMultilingualNeural (female) and en-US-GuyNeural (male).
+NO SILENCE PADDING: Length comes only from real content (2,800-3,200 words).
+Never pad with silence, loop, or repeat audio to meet a target.
+
+TTS priority: Kokoro (af_heart/am_adam; MAYA→af_heat, ADAM→am_adam) → edge-tts fallback (Ava/Brian).
 """
 import os, sys, json, glob, math, shutil, subprocess as sp, textwrap, time
 import datetime, hashlib, re, uuid, random, copy
@@ -33,7 +33,7 @@ FEED_COVER_URL = "https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/
 
 SD_API_TIMEOUT = 300
 
-# Voices - Kokelo (AF/AM) or edge-tts fallback
+# Voices - Kokoro (AF/AM) or edge-tts fallback
 EDGE_FEMALE_VOICE = "en-US-AvaMultilingualNeural"
 EDGE_MALE_VOICE = "en-US-BrianNeural"
 TTS_MODE = None
@@ -52,11 +52,28 @@ def fail(reason, step=""):
         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         f.write(f"[{ts}] {step}: {reason}\n")
 
-def save_tts_log(mode_used):
+def save_tts_log(mode_used, total_segments=0, rendered_segments=0, segments_info=None):
+    """Save TTS log with segment details for debugging and quality checks."""
     global TTS_MODE
     TTS_MODE = mode_used
+    if segments_info is None:
+        segments_info = []
+    log_data = {
+        "mode": mode_used,
+        "date": TODAY,
+        "total_segments": total_segments,
+        "rendered_segments": rendered_segments,
+        "segments": [],
+    }
+    for s in segments_info:
+        seg_entry = {"index": s.get("idx", -1), "engine": s.get("engine", ""), "success": bool(s.get("success", False))}
+        if s.get("voice"):
+            seg_entry["voice"] = s["voice"]
+        if s.get("duration_s") is not None:
+            seg_entry["duration_s"] = s["duration_s"]
+        log_data["segments"].append(seg_entry)
     with open(TTS_LOG, "w") as f:
-        json.dump({"mode": mode_used, "date": TODAY}, f)
+        json.dump(log_data, f, indent=2)
 
 
 # ======== RSS ========
@@ -167,14 +184,16 @@ def generate_dialogue(stories):
         "SELECT the 8-10 most important/interesting TECH and AI stories from this list of fresh items (last 24 hours):\n"
         f"{stories_text}\n\n"
         "Write an alternating dialogue script between:\n"
-        "- HOST A (female voice, warm enthusiastic anchor) — lines start with 'A: '\n"
-        "- HOST B (male voice, analytical dry humor) — lines start with 'B: '\n\n"
+        "- MAYA (warm, curious host who asks the questions listeners would ask) — lines start with 'MAYA: '\n"
+        "- ADAM (calm host who explains tech in plain words) — lines start with 'ADAM: '\n\n"
         "CRITICAL REQUIREMENTS:\n"
-        "1. Exactly 8-10 stories, each covered with ~7-9 A%/B% pairs. TOTAL MUST NOT EXCEED 75 dialogue lines.\n"
+        "1. Exactly 8-10 stories, each covered with ~7-9 MAYA/ADAM pairs. TOTAL MUST NOT EXCEED 75 dialogue lines.\n"
         "2. Target 3,000 to 4,000 words total — exactly on target, no more. NEVER exceed 4,000 words.\n"
-        "3. Each line must be substantial — minimum 80 words per A%/B% line.\n"
-        "4. Start with warm intro, end with sign-off + preview of next episode.\n"
-        "5. Format EXACTLY: 'A: text' or 'B: text' per line — no other prefix, no extra text, no numbered lists.\n\n"
+        "3. Each line must be substantial — minimum 80 words per MAYA/ADAM line.\n"
+        "4. Open with: 'Good morning, this is the M5 Morning Brief. I'm Maya.' / 'And I'm Adam.' then the date.\n"
+        "5. End with a short sign-off from both by name (e.g. 'I'm Maya.' / 'And I'm Adam — see you tomorrow.').\n"
+        "6. They should call each other by name naturally here and there, not every line.\n"
+        "7. Format EXACTLY: 'MAYA: text' or 'ADAM: text' per line — no other prefix, no extra text, no numbered lists. Your opening MUST start with the greeting lines exactly as shown.\n\n"
         "WRITE THE COMPLETE FULL SCRIPT NOW:"
     )
 
@@ -185,14 +204,16 @@ def generate_dialogue(stories):
     for attempt in range(max_attempts):
         try:
             payload = json.dumps({
-                "model": "qwen3.6-hermes",
+                "model": "qwen3.8:27b-mlx",
                 "prompt": prompt,
                 "stream": False,
-                "options": {"temperature": 0.7, "max_tokens": 8192}
+                "think": True,
+                "keep_alive": "5m",
+                "options": {"temperature": 0.7, "num_predict": 20000, "num_ctx": 32768}
             })
 
             req = Request(ollama_url, data=payload.encode(), headers={"Content-Type": "application/json"})
-            resp = urlopen(req, timeout=300)
+            resp = urlopen(req, timeout=2400)
             result = json.loads(resp.read().decode())
             script_text = result.get("response", "")
 
@@ -201,7 +222,7 @@ def generate_dialogue(stories):
                 continue
 
             lines = script_text.split("\n")
-            valid_lines = [l for l in lines if l.startswith("A: ") or l.startswith("B: ")]
+            valid_lines = [l for l in lines if l.startswith("MAYA: ") or l.startswith("ADAM: ")]
             word_count = len(script_text.split())
             log(f"Attempt {attempt + 1}: {word_count} words, {len(valid_lines)} dialogue lines")
 
@@ -220,7 +241,7 @@ def generate_dialogue(stories):
     # Extract clean dialogue lines from whatever we got
     if script_text:
         lines = script_text.split("\n")
-        valid_lines = [l for l in lines if l.strip().startswith("A: ") or l.strip().startswith("B: ")]
+        valid_lines = [l for l in lines if l.strip().startswith("MAYA: ") or l.strip().startswith("ADAM: ") or l.strip().startswith("A: ") or l.strip().startswith("B: ")]
     else:
         valid_lines = generate_fallback_script(stories)
 
@@ -242,8 +263,8 @@ def generate_dialogue(stories):
     raw_rate_divisor = 160 * target_min
     calc_rate = (word_count / max(raw_rate_divisor, 1)) * 100 - 100
     # Clamp between -5% and +80% to keep natural speech speeds
-    calc_rate = max(-5.0, min(80.0, calc_rate))
-    TTS_RATE = f"+{calc_rate:.0f}%"
+    calc_rate = max(-10.0, min(10.0, calc_rate))
+    TTS_RATE = f"{int(round(calc_rate)):+d}%"
     log(f"Dynamic TTS rate calculated: {TTS_RATE} (for {word_count} words → target {target_min} min)")
 
     return valid_lines, truncated_script
@@ -279,18 +300,21 @@ def generate_fallback_script(stories):
 
 
 # ======== TTS ========
-def check_kokelo_availability():
-    """Check if kokelo is importable."""
+def check_kokoro_availability():
+    """Check if kokoro is importable with sys.executable verification."""
+    import sys
+    log(f"kokoro startup check — python: {sys.executable}")
     try:
         from kokoro import KPipeline  # noqa
+        log("Kokoro import OK")
         return True
     except ImportError as e:
-        fail(f"Kokelo unavailable: {e}", "tts_check")
+        fail(f"kokoro import failed on {sys.executable}: {e}", "tts_check")
         return False
 
 
-def render_with_kokelo(script_lines):
-    """Render all dialogue lines using Kokelo voices."""
+def render_with_kokoro(script_lines):
+    """Render all dialogue lines using Kokoro voices."""
     wav_dir = os.path.join(EPISODE_DIR, "wav_segs")
     os.makedirs(wav_dir, exist_ok=True)
 
@@ -302,7 +326,16 @@ def render_with_kokelo(script_lines):
         text = line.split(": ", 1)[-1].strip()
         if not text:
             continue
-        voice = "AF" if prefix_text == "A" else "AM"
+        if prefix_text == "MAYA":
+            voice = "af_heart"
+        elif prefix_text == "ADAM":
+            voice = "am_adam"
+        elif prefix_text == "A":  # fallback old format
+            voice = "af_heart"
+        elif prefix_text == "B":  # fallback old format
+            voice = "am_adam"
+        else:
+            voice = "af_heart"  # default fallback A
         segments.append((voice, text))
 
     total = len(segments)
@@ -329,15 +362,15 @@ def render_with_kokelo(script_lines):
         with open(helper_path, "w") as h:
             h.write(code)
 
-        kokelo_bin = os.path.expanduser("~/AI/Kokoro/venv/bin/python3")
-        result = sp.run([kokelo_bin, helper_path], capture_output=True, text=True, timeout=30)
+        kokoro_py = os.path.expanduser("~/AI/Kokoro/venv/bin/python")
+        result = sp.run([kokoro_py, helper_path], capture_output=True, text=True, timeout=30)
         if result.returncode == 0 and os.path.exists(wav_path) and os.path.getsize(wav_path) > 100:
             success_count += 1
         else:
-            fail(f"Kokelo render failed seg {i}: {(result.stderr or result.stdout)[:200]}", "tts_kokelo")
+            fail(f"Kokoro render failed seg {i}: {(result.stderr or result.stdout)[:200]}", "tts_kokoro")
 
-    save_tts_log("kokelo")
-    log(f"Kokelo generated {success_count}/{total} segments")
+    save_tts_log("kokoro")
+    log(f"Kokoro generated {success_count}/{total} segments")
     return wav_dir
 
 
@@ -386,25 +419,23 @@ def render_with_edge_tts(script_lines, tts_rate="+0%"):
             fail(f"edge-tts segment {i} failed: {e}", "tts_edge")
 
     save_tts_log("edge_tts")
-    log(f"edge-tts generated {success_count}/{total} segments (Kokelo unavailable - numpy ABI)")
+    log(f"edge-tts generated {success_count}/{total} segments (fallback)")
     return seg_dir
 
 
 def render_audio(dialogue_lines, tts_rate=None):
-    """Dispatch TTS rendering."""
-    if check_kokelo_availability():
-        log("Using Kokelo TTS with voices AF/AM...")
-        wav_dir = render_with_kokelo(dialogue_lines)
+    """Dispatch TTS rendering: Kokoro first → edge-tts last resort."""
+    ok = check_kokoro_availability()
+
+    if ok:
+        log("Using Kokoro TTS with voices af_heart/am_adam...")
+        wav_dir = render_with_kokoro(dialogue_lines)
         count = len(glob.glob(os.path.join(wav_dir, "*.wav")))
     else:
         rate = tts_rate or "+0%"
-        log(f"Kokelo unavailable -- using edge-tts fallback (Ava/Guy) at rate {rate}")
+        log(f"Kokoro unavailable -- using edge-tts fallback (Ava/Brian) at rate {rate}")
         wav_dir = render_with_edge_tts(dialogue_lines, rate)
         count = len(glob.glob(os.path.join(wav_dir, "*.wav")))
-
-    if count == 0:
-        fail("No segments rendered by any TTS engine!", "tts_none")
-        raise RuntimeError("Audio rendering failed: zero segments produced")
 
     return wav_dir, count
 
@@ -493,6 +524,161 @@ def convert_to_m4a(ep_wav):
     m4a_dur = float(r3.stdout.strip()) if r3.stdout.strip() else 0
     log(f"Final M4A: {final_m4a} -- duration: {m4a_dur:.1f}s ({m4a_dur / 60:.1f} min)")
     return final_m4a, m4a_dur
+
+
+# ======== Silence Check ========
+def check_silence(m4a_path):
+    """Run ffmpeg silencedetect on the final M4A. Return (valid, silence_info).
+
+    Fails if:
+      * Any silence gap > 3 seconds
+      * Last 10 seconds of audio are silent
+    
+    If invalid, don't publish -- return failure info.
+    """
+    if not m4a_path or not os.path.exists(m4a_path):
+        return False, "Episode file missing", {}
+
+    try:
+        result = sp.run(
+            ["ffmpeg", "-i", m4a_path,
+             "-af", "silencedetect=noise=-40dB:d=2",
+             "-f", "null", "-"],
+            capture_output=True, text=True, timeout=60
+        )
+        
+        # Parse silence events from stderr
+        silences = []
+        start_time = None
+        for line in result.stderr.splitlines():
+            if "silence_start:" in line:
+                val = line.split("silence_start:")[-1].strip()
+                start_time = float(val)
+            elif "silence_end:" in line:
+                parts = line.split("|")
+                sil_end = float(parts[0].split("silence_end:")[-1].strip())
+                dur_tag = parts[1] if len(parts) > 1 else ""
+                dur_val = float(dur_tag.split("silence_duration:")[-1].strip()) if "silence_duration:" in dur_tag else 0
+                silences.append({"start": start_time, "end": sil_end, "duration": dur_val})
+                start_time = None
+        
+        if not silences:
+            # No silence detected -- that's fine actually (too clean?)
+            log("Silence check: no significant silence gaps found")
+            return True, "OK", {"gaps": 0, "silences": []}
+        
+        # Check for any single gap > 3s
+        long_gaps = [s for s in silences if s["duration"] > 3.0]
+        
+        # Check last 10s: get total file duration
+        dur_result = sp.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", m4a_path],
+            capture_output=True, text=True, timeout=30
+        )
+        total_dur = float(dur_result.stdout.strip()) if dur_result.stdout.strip() else 0
+        
+        # Check if last 10s are silent: find silence that covers the end portion
+        last_silence_start = total_dur - 10.0
+        last_10s_silent = False
+        for s in silences:
+            if s["start"] >= last_silence_start or (s["start"] < last_silence_start and s["end"] >= total_dur):
+                last_10s_silent = True
+                break
+        
+        invalid_gaps = []
+        if long_gaps:
+            for g in long_gaps:
+                log(f"SILENCE ALERT: gap of {g['duration']:.1f}s from {g['start']:.1f}s to {g['end']:.1f}s (>3s)")
+                invalid_gaps.append(g)
+        if last_10s_silent:
+            log("SILENCE ALERT: last 10 seconds of audio are silent")
+        
+        reason = ""
+        if long_gaps or last_10s_silent:
+            detail_parts = []
+            for g in long_gaps:
+                detail_parts.append(f"{g['duration']:.1f}s gap at {g['start']:.0f}s-{g['end']:.0f}s")
+            if last_10s_silent:
+                detail_parts.append("last 10s silent")
+            reason = f"Silence check failed: {'; '.join(detail_parts)}"
+        
+        return (False, reason, {"total_duration": total_dur, "gaps": len(silences), "long_gaps": len(long_gaps), 
+                                "silences": [{"start": s["start"], "end": s["end"], "duration": s["duration"]} for s in silences]})
+    
+    except FileNotFoundError:
+        log("ffprobe/ffmpeg not found -- skipping silence check")
+        return True, "SKIPPED (no ffmpeg)", {}
+    except Exception as e:
+        fail(f"Silence check error: {e}", "silence")
+        return False, f"Silence check error: {e}", {}
+
+
+# ======== Cleanup ========
+def cleanup_episode_dir():
+    """Clean up episode directory after successful publish.
+    
+    Keep only: episode_final.m4a, script.md, sources_used.txt, tts_log.json, FAILURES.txt
+    Delete everything else (wav_segs/, full_episode.wav, extra files, etc.)
+    Also clean old date folders (keep last 7 days).
+    """
+    keep = {"episode_final.m4a", "script.md", "sources_used.txt", "tts_log.json", "FAILURES.txt"}
+    
+    deleted_files = []
+    for item in os.listdir(EPISODE_DIR):
+        filepath = os.path.join(EPISODE_DIR, item)
+        if not os.path.isfile(filepath):
+            # Non-file: check if it's a known temp directory
+            if item == "wav_segs":
+                shutil.rmtree(filepath, ignore_errors=True)
+                deleted_files.append(item + "/")
+            elif item.startswith("mb-"):
+                shutil.rmtree(filepath, ignore_errors=True)
+                deleted_files.append(item + "/")
+            continue
+        
+        base = os.path.basename(item)
+        if base not in keep and not base.endswith(".txt") and not base.endswith(".json"):
+            # Also keep the feed.xml even though it's not in keep list
+            if base == "feed.xml":
+                continue
+            try:
+                os.remove(filepath)
+                deleted_files.append(base)
+            except Exception as e:
+                log(f"Failed to delete {item}: {e}")
+    
+    # Clean old date folders (keep last 7 days)
+    base_dir = BASE_DIR
+    if not os.path.isdir(base_dir):
+        return
+    
+    today_date = datetime.date.today()
+    episodes_dirs = []
+    for item in os.listdir(base_dir):
+        item_path = os.path.join(base_dir, item)
+        d = datetime.date.fromisoformat(item) if is_date_string(item) else None
+        if d and os.path.isdir(item_path):
+            episodes_dirs.append((d, item_path))
+    
+    # Sort by date descending, remove beyond 7-day keep window
+    episodes_dirs.sort(key=lambda x: x[0], reverse=True)
+    for d, path in episodes_dirs[7:]:
+        age = (today_date - d).days
+        log(f"Removing episode folder {path} ({age} days old)")
+        shutil.rmtree(path, ignore_errors=True)
+    
+    if deleted_files:
+        log(f"Cleanup: deleted/removed {len(deleted_files)} items: {', '.join(deleted_files[:10])}")
+
+
+def is_date_string(s):
+    """Check if a string is a YYYY-MM-DD date."""
+    try:
+        datetime.date.fromisoformat(s)
+        return True
+    except (ValueError, TypeError):
+        return False
 
 
 # ======== Cover Art ========
@@ -694,7 +880,7 @@ def generate_feed_xml(episodes_to_include):
             '      <dc:creator>Ronny Yoder</dc:creator>',
             f'      <pubDate>{ep.get("pub_rfc822", newest_pub)}</pubDate>',
             # Plain Python string — no shell quoting artifacts (FIX 4)
-            f'      <description>M5 Morning Brief daily tech and AI news for {ep_date}.</description>',
+            f'      <description>M5 Morning Brief daily tech and AI news, hosted by Maya and Adam (MAYA=af_heart / ADAM=am_adam) — no silence padding. Episode: {ep_date}.</description>',
             f'      <enclosure url="{ep.get("m4a_url", "")}" type="audio/m4a" length="{ep.get("file_size", "?")}"/>',
             f'      <itunes:duration>{duration_str}</itunes:duration>',  # HH:MM:SS only (FIX 5)
             '      <itunes:explicit>false</itunes:explicit>',
@@ -867,8 +1053,8 @@ def run_pipeline():
     raw_rate_divisor = 160 * target_min
     calc_rate = (word_count / max(raw_rate_divisor, 1)) * 100 - 100
     # Clamp between -5% and +80% to keep natural speech speeds
-    calc_rate = max(-5.0, min(80.0, calc_rate))
-    TTS_RATE = f"+{calc_rate:.0f}%"
+    calc_rate = max(-10.0, min(10.0, calc_rate))
+    TTS_RATE = f"{int(round(calc_rate)):+d}%"
     log(f"Dynamic TTS rate calculated: {TTS_RATE} (for {word_count} words → target {target_min} min)")
 
     # Save script file
@@ -884,8 +1070,10 @@ def run_pipeline():
     try:
         wav_dir, seg_count = render_audio(dialogue_lines, TTS_RATE)
         all_wavs = len(glob.glob(os.path.join(wav_dir, "*.wav")))
-        if all_wavs < len(dialogue_lines):
-            fail(f"TTS quality low: {all_wavs}/{len(dialogue_lines)} segments", "tts_quality")
+        min_required = max(1, int(len(dialogue_lines) * 0.95))
+        if all_wavs < min_required:
+            fail(f"TTS quality low: {all_wavs} of {len(dialogue_lines)} segments (need {min_required})", "tts_quality")
+            return None
     except RuntimeError as e:
         fail(str(e), "tts_runtime")
         return None
@@ -903,11 +1091,40 @@ def run_pipeline():
         fail("M4A conversion failed", "convert_m4a")
         return None
 
-    # 6. Cover Art
+    # 6. Silence check -- FAIL if any silence > 3s or last 10s silent
+    log("=== Checking for silence ===")
+    valid, reason, sil_info = check_silence(m4a_path)
+    if not valid:
+        fail(reason, "silence_check")
+        # Update tts_log.json with silence result
+        if os.path.exists(TTS_LOG):
+            with open(TTS_LOG) as f:
+                tsl = json.load(f)
+            tsl["silence_check"] = {"valid": False, "reason": reason}
+            if sil_info:
+                tsl["silence_details"] = sil_info
+            with open(TTS_LOG, "w") as f:
+                json.dump(tsl, f, indent=2)
+        log(f"SILENCE CHECK FAILED: {reason}")
+        log("Episode NOT published -- silence detected in final audio.")
+        return None
+    else:
+        log(f"Silence check PASSED: {reason}")
+        # Update tts_log.json with silence result
+        if os.path.exists(TTS_LOG):
+            with open(TTS_LOG) as f:
+                tsl = json.load(f)
+            tsl["silence_check"] = {"valid": True, "result": reason}
+            if sil_info:
+                tsl["silence_details"] = sil_info
+            with open(TTS_LOG, "w") as f:
+                json.dump(tsl, f, indent=2)
+
+    # 7. Cover Art
     log("=== Generating cover art ===")
     cover_jpg = get_cover_art()
 
-    # Check duration target (18-22 min)
+    # Check duration target (18-22 min) -- NO PADDING EVER
     if m4a_duration < 600:
         fail(f"Episode critically short at {m4a_duration:.0f}s ({m4a_duration/60:.1f} min) — pipeline aborted", "duration")
         return None
@@ -919,7 +1136,7 @@ def run_pipeline():
         fail(f"Episode overlong: {m4a_duration:.0f}s", "duration")
         return None
 
-    # 7. Publish to GitHub + Feed
+    # 8. Publish to GitHub + Feed
     log("=== Publishing ===")
 
     # Get last 7 episodes for feed generation
@@ -965,7 +1182,22 @@ def run_pipeline():
     except Exception as e:
         fail(f"GitHub publishing error: {e}", "github_publish")
 
-    # 8. Final verification
+    # 9. Cleanup episode directory -- keep only essentials after publish success
+    cleanup_ok = False
+    try:
+        cleanup_episode_dir()
+        cleanup_ok = True
+    except Exception as e:
+        fail(f"Episode directory cleanup failed: {e}", "cleanup")
+
+    # Also delete mb-<date> staging folder once files uploaded to release
+    repo_dir = os.path.expanduser("~/M5-Morning-Brief")
+    stage_folder = os.path.join(BASE_DIR, f"mb-{TODAY}")
+    if publish_ok and os.path.isdir(stage_folder):
+        shutil.rmtree(stage_folder, ignore_errors=True)
+        log(f"Removed staging folder: {stage_folder}")
+
+    # 10. Final verification
     log("")
     log("======================")
     log("=== Final Status ===")
@@ -980,12 +1212,14 @@ def run_pipeline():
     result["feed_url"] = PAGES_FEED_URL
     result["tts_mode"] = TTS_MODE or "unknown"
     result["github_ok"] = publish_ok
+    result["cleanup_ok"] = cleanup_ok
     
     log(f"Duration: {result['duration']}")
     log(f"M4A codec: {result['m4a_codec']}")
     log(f"TTS mode: {result['tts_mode']}")
     log(f"Feed URL: {result['feed_url']}")
     log(f"GitHub publish: {'OK' if result['github_ok'] else 'FAILED'}")
+    log(f"Cleanup: {'OK' if result['cleanup_ok'] else 'FAILED'}")
 
     return m4a_duration
 
