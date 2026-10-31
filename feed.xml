@@ -1,55 +1,81 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<rss xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0">
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
   <channel>
-    <title>M5 Morning Brief</title>
-    <link>https://github.com/ronyoder31-maker/M5-Morning-Brief</link>
-    <description>Daily technology news deep-dives covering tech, AI, and innovation. Covering The Verge, Ars Technica, TechCrunch, Engadget, Wired, 9to5Mac, MacRumors.</description>
+    <title>M5 Morning Brief -- Daily Tech &amp; AI News Podcast</title>
+    <link>https://ronyoder31-maker.github.io/M5-Morning-Brief/feed.xml</link>
+    <description>M5 Morning Brief -- daily tech and AI news podcast hosted by Ronny Yoder. Covering the most important tech and AI stories from The Verge, Ars Technica, TechCrunch, Engadget, Wired, MacRumors, Hacker News, VentureBeat, EFF, and other leading sources.</description>
     <language>en-us</language>
     <copyright>(C) 2026 Ronny Yoder</copyright>
-    <pubDate>Fri, 30 Oct 2026 00:51:17 +0000</pubDate>
-    <lastBuildDate>Fri, 30 Oct 2026 00:51:17 +0000</lastBuildDate>
+    <pubDate>Sat, 31 Oct 2026 00:41:28 +0000</pubDate>
+    <lastBuildDate>Sat, 31 Oct 2026 00:41:28 +0000</lastBuildDate>
     <generator>M5 Morning Brief (Hermes Agent)</generator>
     <ttl>60</ttl>
-    <itunes:image href="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/latest/download/cover.jpg"/>
+    <itunes:image href="https://ronyoder31-maker.github.io/M5-Morning-Brief/cover.jpg"/>
     <itunes:author>Ronny Yoder</itunes:author>
     <itunes:type>episodic</itunes:type>
-    <itunes:summary>Daily technology news deep-dives covering tech, AI, and innovation. Covering The Verge, Ars Technica, TechCrunch, Engadget, Wired, 9to5Mac, MacRumors.</itunes:summary>
+    <itunes:summary>M5 Morning Brief -- daily tech and AI news podcast hosted by Ronny Yoder.</itunes:summary>
     <itunes:owner>
       <itunes:name>Ronny Yoder</itunes:name>
       <itunes:email>ronyoder31@gmail.com</itunes:email>
     </itunes:owner>
     <itunes:explicit>false</itunes:explicit>
     <itunes:category text="Technology"/>
-    <atom:link href="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/latest/download/feed.xml" rel="self" type="application/rss+xml"/>
+    <atom:link href="https://ronyoder31-maker.github.io/M5-Morning-Brief/feed.xml" rel="self" type="application/rss+xml"/>
     <item>
-      <title>M5 Morning Brief - October 30, 2026</title>
-      <link>https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/tag/mb-2026-10-30</link>
-      <guid isPermaLink="false">mb-2026-10-30</guid>
+      <title>M5 Morning Brief - 2026-10-31</title>
+      <link>https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/tag/mb-2026-10-31</link>
+      <guid isPermaLink="false">mb-2026-10-31</guid>
       <dc:creator>Ronny Yoder</dc:creator>
-      <pubDate>Fri, 30 Oct 2026 00:51:17 +0000</pubDate>
-      <description>M5 Morning Brief daily tech and AI news for 2026-10-30.</description>
-      <enclosure url="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-10-30/episode_final.m4a" type="audio/m4a" length=""/>
-      <itunes:duration>00:19:00</itunes:duration>
+      <pubDate>Sat, 31 Oct 2026 00:41:28 +0000</pubDate>
+      <description>M5 Morning Brief daily tech and AI news for 2026-10-31.</description>
+      <enclosure url="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-10-31/episode_final.m4a" type="audio/m4a" length="16939008" />
+      <itunes:duration>00:17:54</itunes:duration>
       <itunes:explicit>false</itunes:explicit>
       <itunes:season>1</itunes:season>
       <itunes:episode>1</itunes:episode>
-      <itunes:title>M5 Morning Brief - October 30, 2026</itunes:title>
-      <content:encoded><![CDATA[M5 Morning Brief daily tech and AI news for 2026-10-30 - Deepdives into tech, AI, and innovation.]]></content:encoded>
+      <itunes:title>M5 Morning Brief - 2026-10-31</itunes:title>
     </item>
     <item>
-      <title>M5 Morning Brief - October 29, 2026</title>
-      <link>https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/tag/mb-2026-10-29</link>
-      <guid isPermaLink="false">mb-2026-10-29</guid>
+      <title>M5 Morning Brief - 2026-10-31</title>
+      <link>https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/tag/mb-2026-10-31</link>
+      <guid isPermaLink="false">mb-2026-10-31</guid>
       <dc:creator>Ronny Yoder</dc:creator>
-      <pubDate>Thu, 29 Oct 2026 09:54:22 +0000</pubDate>
-      <description>M5 Morning Brief daily tech and AI news for 2026-10-29.</description>
-      <enclosure url="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-10-29/episode_final.m4a" type="audio/m4a" length=""/>
-      <itunes:duration>?</itunes:duration>
+      <pubDate>Sat, 31 Oct 2026 00:41:28 +0000</pubDate>
+      <description>M5 Morning Brief daily tech and AI news for 2026-10-31.</description>
+      <enclosure url="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-10-31/episode_final.m4a" type="audio/m4a" length="?" />
+      <itunes:duration>00:17:54</itunes:duration>
       <itunes:explicit>false</itunes:explicit>
       <itunes:season>1</itunes:season>
       <itunes:episode>2</itunes:episode>
-      <itunes:title>M5 Morning Brief - October 29, 2026</itunes:title>
-      <content:encoded><![CDATA[M5 Morning Brief daily tech and AI news for 2026-10-29 - Deepdives into tech, AI, and innovation.]]></content:encoded>
+      <itunes:title>M5 Morning Brief - 2026-10-31</itunes:title>
+    </item>
+    <item>
+      <title>M5 Morning Brief - 2026-10-30</title>
+      <link>https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/tag/mb-2026-10-30</link>
+      <guid isPermaLink="false">mb-2026-10-30</guid>
+      <dc:creator>Ronny Yoder</dc:creator>
+      <pubDate>Sat, 31 Oct 2026 00:41:28 +0000</pubDate>
+      <description>M5 Morning Brief daily tech and AI news for 2026-10-30.</description>
+      <enclosure url="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-10-30/episode_final.m4a" type="audio/m4a" length="?" />
+      <itunes:duration>00:19:00</itunes:duration>
+      <itunes:explicit>false</itunes:explicit>
+      <itunes:season>1</itunes:season>
+      <itunes:episode>3</itunes:episode>
+      <itunes:title>M5 Morning Brief - 2026-10-30</itunes:title>
+    </item>
+    <item>
+      <title>M5 Morning Brief - 2026-10-29</title>
+      <link>https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/tag/mb-2026-10-29</link>
+      <guid isPermaLink="false">mb-2026-10-29</guid>
+      <dc:creator>Ronny Yoder</dc:creator>
+      <pubDate>Sat, 31 Oct 2026 00:41:28 +0000</pubDate>
+      <description>M5 Morning Brief daily tech and AI news for 2026-10-29.</description>
+      <enclosure url="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-10-29/episode_final.m4a" type="audio/m4a" length="?" />
+      <itunes:duration>?</itunes:duration>
+      <itunes:explicit>false</itunes:explicit>
+      <itunes:season>1</itunes:season>
+      <itunes:episode>4</itunes:episode>
+      <itunes:title>M5 Morning Brief - 2026-10-29</itunes:title>
     </item>
   </channel>
 </rss>
