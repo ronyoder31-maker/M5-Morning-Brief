@@ -300,77 +300,102 @@ def generate_fallback_script(stories):
 
 
 # ======== TTS ========
+KOKORO_PY = os.path.expanduser("~/AI/Kokoro/venv/bin/python")
+
+
 def check_kokoro_availability():
-    """Check if kokoro is importable with sys.executable verification."""
-    import sys
-    log(f"kokoro startup check — python: {sys.executable}")
-    try:
-        from kokoro import KPipeline  # noqa
-        log("Kokoro import OK")
-        return True
-    except ImportError as e:
-        fail(f"kokoro import failed on {sys.executable}: {e}", "tts_check")
+    """Check that the Kokoro venv Python can import kokoro (that's the Python that renders)."""
+    log(f"kokoro startup check - python: {KOKORO_PY}")
+    if not os.path.exists(KOKORO_PY):
+        fail(f"Kokoro venv python not found at {KOKORO_PY}", "tts_check")
         return False
+    try:
+        r = sp.run([KOKORO_PY, "-c", "from kokoro import KPipeline"],
+                   capture_output=True, text=True, timeout=180)
+    except Exception as e:
+        fail(f"kokoro check error: {e}", "tts_check")
+        return False
+    if r.returncode != 0:
+        fail(f"kokoro import failed on {KOKORO_PY}: {(r.stderr or r.stdout)[-300:]}", "tts_check")
+        return False
+    log("Kokoro import OK")
+    return True
+
+
+KOKORO_HELPER = r"""
+import json, sys
+import numpy as np
+import soundfile as sf
+from kokoro import KPipeline
+
+jobs = json.load(open(sys.argv[1]))
+p = KPipeline(lang_code='a')
+ok = 0
+for job in jobs:
+    try:
+        chunks = [np.asarray(audio, dtype=np.float32)
+                  for _, _, audio in p(job["text"], voice=job["voice"])
+                  if audio is not None]
+        if chunks:
+            sf.write(job["wav"], np.concatenate(chunks), 24000)
+            ok += 1
+        else:
+            print(f"no audio for seg {job['idx']}", file=sys.stderr)
+    except Exception as e:
+        print(f"seg {job['idx']} failed: {e}", file=sys.stderr)
+print(f"KOKORO_OK {ok}/{len(jobs)}")
+"""
 
 
 def render_with_kokoro(script_lines):
-    """Render all dialogue lines using Kokoro voices."""
+    """Render all dialogue lines using Kokoro voices (one pipeline load, text passed as JSON)."""
     wav_dir = os.path.join(EPISODE_DIR, "wav_segs")
     os.makedirs(wav_dir, exist_ok=True)
+    for old in glob.glob(os.path.join(wav_dir, "*")):
+        if os.path.isfile(old):
+            os.remove(old)
 
-    segments = []
+    voice_for = {"MAYA": "af_heart", "ADAM": "am_michael", "A": "af_heart", "B": "am_michael"}
+    jobs = []
     for line in script_lines:
         if ": " not in line:
             continue
-        prefix_text = line.split(": ", 1)[0].strip()
-        text = line.split(": ", 1)[-1].strip()
+        prefix_text, text = line.split(": ", 1)
+        text = text.strip()
         if not text:
             continue
-        if prefix_text == "MAYA":
-            voice = "af_heart"
-        elif prefix_text == "ADAM":
-            voice = "am_michael"
-        elif prefix_text == "A":  # fallback old format
-            voice = "af_heart"
-        elif prefix_text == "B":  # fallback old format
-            voice = "am_michael"
-        else:
-            voice = "af_heart"  # default fallback A
-        segments.append((voice, text))
+        i = len(jobs)
+        jobs.append({"idx": i,
+                     "voice": voice_for.get(prefix_text.strip(), "af_heart"),
+                     "text": text,
+                     "wav": os.path.join(wav_dir, f"seg_{i:04d}.wav")})
 
-    total = len(segments)
-    success_count = 0
+    jobs_path = os.path.join(EPISODE_DIR, "kokoro_jobs.json")
+    helper_path = os.path.join(EPISODE_DIR, "kokoro_render.py")
+    with open(jobs_path, "w") as f:
+        json.dump(jobs, f)
+    with open(helper_path, "w") as f:
+        f.write(KOKORO_HELPER)
 
-    for i, (voice_id, text) in enumerate(segments):
-        wav_path = os.path.join(wav_dir, f"seg_{i:04d}.wav")
-        helper_path = os.path.join(wav_dir, f"render_seg_{i}.py")
+    try:
+        result = sp.run([KOKORO_PY, helper_path, jobs_path],
+                        capture_output=True, text=True, timeout=3600)
+        if result.returncode != 0 or result.stderr.strip():
+            fail(f"Kokoro render issues: {(result.stderr or result.stdout)[-500:]}", "tts_kokoro")
+    except Exception as e:
+        fail(f"Kokoro render error: {e}", "tts_kokoro")
+    finally:
+        for pth in (jobs_path, helper_path):
+            try:
+                os.remove(pth)
+            except OSError:
+                pass
 
-        # Safe string escaping for python subprocess
-        text_escaped = text.replace('"', '\\"').replace('\n', '\\n')
-        code = (
-            f'from kokoro import KPipeline\nimport numpy as np\nimport soundfile as sf\n'
-            f"p = KPipeline(lang_code='a')\n"
-            f"voice = '{voice_id}'\n"
-            f"text = '{text_escaped}'\n"
-            f"r = p(text, voice=voice)\n"
-            f"audio = r[2] if isinstance(r, tuple) and len(r) >= 3 else None\n"
-            f"if audio is not None:\n"
-            f'    sr = 24000; data = np.array(audio).astype(np.float32)\n'
-            f"    sf.write('{wav_path}', data, sr)\n"
-        )
-
-        with open(helper_path, "w") as h:
-            h.write(code)
-
-        kokoro_py = os.path.expanduser("~/AI/Kokoro/venv/bin/python")
-        result = sp.run([kokoro_py, helper_path], capture_output=True, text=True, timeout=30)
-        if result.returncode == 0 and os.path.exists(wav_path) and os.path.getsize(wav_path) > 100:
-            success_count += 1
-        else:
-            fail(f"Kokoro render failed seg {i}: {(result.stderr or result.stdout)[:200]}", "tts_kokoro")
-
-    save_tts_log("kokoro")
-    log(f"Kokoro generated {success_count}/{total} segments")
+    success_count = len([j for j in jobs if os.path.exists(j["wav"]) and os.path.getsize(j["wav"]) > 100])
+    save_tts_log("kokoro", len(jobs), success_count,
+                 [{"idx": j["idx"], "engine": "kokoro", "voice": j["voice"],
+                   "success": os.path.exists(j["wav"])} for j in jobs])
+    log(f"Kokoro generated {success_count}/{len(jobs)} segments")
     return wav_dir
 
 
@@ -380,6 +405,9 @@ def render_with_edge_tts(script_lines, tts_rate="+0%"):
 
     seg_dir = os.path.join(EPISODE_DIR, "wav_segs")
     os.makedirs(seg_dir, exist_ok=True)
+    for old in glob.glob(os.path.join(seg_dir, "*")):
+        if os.path.isfile(old):
+            os.remove(old)
 
     segment_data = []
     for line in script_lines:
@@ -389,7 +417,7 @@ def render_with_edge_tts(script_lines, tts_rate="+0%"):
         text = line.split(": ", 1)[-1].strip()
         if not text:
             continue
-        voice = EDGE_FEMALE_VOICE if prefix_text == "A" else EDGE_MALE_VOICE
+        voice = EDGE_FEMALE_VOICE if prefix_text in ("A", "MAYA") else EDGE_MALE_VOICE
         segment_data.append((voice, text))
 
     total = len(segment_data)
@@ -431,7 +459,11 @@ def render_audio(dialogue_lines, tts_rate=None):
         log("Using Kokoro TTS with voices af_heart/am_michael...")
         wav_dir = render_with_kokoro(dialogue_lines)
         count = len(glob.glob(os.path.join(wav_dir, "*.wav")))
-    else:
+        expected = len([l for l in dialogue_lines if ": " in l and l.split(": ", 1)[1].strip()])
+        if count < expected:
+            fail(f"Kokoro rendered {count}/{expected} segments -- falling back to edge-tts", "tts_kokoro")
+            ok = False
+    if not ok:
         rate = tts_rate or "+0%"
         log(f"Kokoro unavailable -- using edge-tts fallback (Ava/Andrew) at rate {rate}")
         wav_dir = render_with_edge_tts(dialogue_lines, rate)
