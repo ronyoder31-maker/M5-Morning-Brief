@@ -13,9 +13,9 @@ if not os.path.exists(hash_file):  # ensure python 3.12+ is used
 import os, sys, glob, json, shutil, asyncio, subprocess as sp
 from datetime import datetime, timezone, timedelta
 
-EPISODE_DIR   = "/Users/casper/Podcasts/M5 Morning Brief/2026-10-31"
-TODAY         = "2026-10-31"
+TODAY         = datetime.now().strftime("%Y-%m-%d")
 RELEASE_TAG   = f"mb-{TODAY}"
+EPISODE_DIR   = f"/Users/casper/Podcasts/M5 Morning Brief/{TODAY}"
 COVER_PNG     = "/Users/casper/Podcasts/M5 Morning Brief/cover.png"
 COVER_JPG     = os.path.join(EPISODE_DIR, "cover.jpg")
 REPO_DIR      = os.path.expanduser("~/M5-Morning-Brief")
@@ -284,6 +284,7 @@ today_ep = {
     "file_size": str(m4a_sz),
     "dur": f"{h:02d}:{mi_r:02d}:{sc:02d}"
 }
+all_entries = [e for e in all_entries if e["tag"] != RELEASE_TAG]  # no duplicates on re-runs
 all_entries.insert(0, today_ep)
 
 # Build XML String with all iTunes fields
@@ -318,7 +319,10 @@ feed_lines = [
 
 for idx, ep in enumerate(all_entries):
     t = "M5 Morning Brief - " + ep["date"]
-    pub_rfc = ep['ep_dt'].strftime("%a, %d %b %Y %H:%M:%S +0000") if isinstance(ep['ep_dt'], datetime) else today_str
+    if not str(ep["file_size"]).isdigit():
+        log("Feed: skipping {} (unknown file size)".format(ep["tag"])); continue
+    _d = ep['ep_dt'] if isinstance(ep['ep_dt'], datetime) else datetime.combine(ep['ep_dt'], datetime.min.time(), timezone.utc).replace(hour=0, minute=30)
+    pub_rfc = today_str if ep["tag"] == RELEASE_TAG else _d.strftime("%a, %d %b %Y %H:%M:%S +0000")
     
     feed_lines.append('    <item>')
     feed_lines += [
@@ -329,11 +333,9 @@ for idx, ep in enumerate(all_entries):
         '      <dc:creator>Ronny Yoder</dc:creator>',
         '      <pubDate>{}</pubDate>'.format(pub_rfc),
         '      <description>{} daily tech and AI news for {}.</description>'.format(t.split(' - ')[0], ep["date"]),
-        '      <enclosure url="{}" type="audio/m4a" length="{}" />'.format(ep["m4a_url"], ep["file_size"]),
+        '      <enclosure url="{}" type="audio/x-m4a" length="{}" />'.format(ep["m4a_url"], ep["file_size"]),
         '      <itunes:duration>{}</itunes:duration>'.format(ep["dur"] if ep.get("dur","?") != "?" else "?"),
         '      <itunes:explicit>false</itunes:explicit>',
-        '      <itunes:season>1</itunes:season>',
-        '      <itunes:episode>{}</itunes:episode>'.format(idx + 1),
         '      <itunes:title>{}</itunes:title>'.format(t),
         '    </item>',
     ]
@@ -358,6 +360,7 @@ shutil.copy2(feed_path, os.path.join(REPO_DIR, "feed.xml"))
 if os.path.exists(COVER_JPG): shutil.copy2(COVER_JPG, os.path.join(REPO_DIR, "cover.jpg"))
 
 os.chdir(REPO_DIR)
+sp.run(["git", "pull", "--rebase", "--autostash", "origin", "main"], capture_output=True, text=True)
 sp.run(["git", "add", "feed.xml", "cover.jpg"], capture_output=True, text=True)
 cr_commit = sp.run(["git", "commit", "--allow-empty", "-m", "Update feed for {}".format(TODAY)], 
                    capture_output=True, text=True)

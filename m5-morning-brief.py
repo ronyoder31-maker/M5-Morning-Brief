@@ -779,7 +779,23 @@ def publish_to_github(episodes, cover_jpg_path):
     if cover_jpg_path and os.path.exists(cover_jpg_path):
         shutil.copy2(cover_jpg_path, os.path.join(repo_dir, "cover.jpg"))
 
-    # Find feed.xml from episodes
+    # 1) Create the release and upload audio FIRST, so the feed never points at a missing file
+    release_tag = f"mb-{TODAY}"
+    if sp.run(["gh", "release", "view", release_tag], capture_output=True, text=True).returncode != 0:
+        sp.run(["gh", "release", "create", release_tag,
+                "--title", f"M5 Morning Brief -- {TODAY}",
+                "--notes", f"Daily tech and AI news podcast for {TODAY}."],
+               capture_output=True, text=True)
+    for ep in episodes:
+        m4a = ep.get("m4a_path") or ""
+        if os.path.exists(m4a):
+            up = sp.run(["gh", "release", "upload", release_tag, m4a, "--clobber"], capture_output=True, text=True)
+            if up.returncode != 0:
+                fail(f"Release upload failed: {up.stderr[:200]}", "github_release")
+                return False
+            log(f"Uploaded {os.path.basename(m4a)} as release asset")
+
+    # 2) Then publish feed.xml + cover via GitHub Pages
     feed_found = ""
     for ep in episodes:
         fpath = os.path.join(ep.get("localPath", ""), "feed.xml")
@@ -787,32 +803,19 @@ def publish_to_github(episodes, cover_jpg_path):
             shutil.copy2(fpath, os.path.join(repo_dir, "feed.xml"))
             feed_found = fpath
             break
-
     if not feed_found:
         fail("No feed.xml found to publish", "github_feed")
+        return False
 
-    # Commits all changes
-    sp.run(["git", "add", "."], capture_output=True, text=True)
+    # Stay in sync with GitHub (fixes may be pushed from elsewhere)
+    sp.run(["git", "pull", "--rebase", "--autostash", "origin", "main"], capture_output=True, text=True)
+    sp.run(["git", "add", "feed.xml", "cover.jpg"], capture_output=True, text=True)
     r = sp.run(["git", "commit", "-m", f"M5 Morning Brief -- {TODAY}"], capture_output=True, text=True)
     if r.returncode == 0:
-        sp.run(["git", "push", "origin", "main"], capture_output=True, text=True)
-
-    # Create release with M4A asset
-    release_tag = f"mb-{TODAY}"
-    gh_release = (sp.run(["gh", "release", "view", release_tag], capture_output=True, text=True)).returncode != 0
-
-    if gh_release:
-        sp.run(["gh", "release", "create", release_tag,
-                "--title", f"M5 Morning Brief -- {TODAY}",
-                "--notes", f"Daily tech and AI news podcast for {TODAY}."],
-               capture_output=True, text=True)
-
-    # Upload M4A as asset
-    for ep in episodes:
-        m4a = ep.get("m4a_path") or ""
-        if os.path.exists(m4a):
-            sp.run(["gh", "release", "upload", release_tag, m4a, "--clobber"], capture_output=True, text=True)
-            log(f"Uploaded {os.path.basename(m4a)} as release asset")
+        pr = sp.run(["git", "push", "origin", "main"], capture_output=True, text=True)
+        if pr.returncode != 0:
+            fail(f"git push failed: {pr.stderr[:200]}", "github_push")
+            return False
 
     log(f"Published to GitHub: release {release_tag}")
     return True
@@ -850,10 +853,10 @@ def generate_feed_xml(episodes_to_include):
         '    <language>en-us</language>',
         f'    <copyright>(C) {now_utc.year} {owner_name}</copyright>',
         f'    <pubDate>{newest_pub}</pubDate>',
-        f'    <lastBuildDate>{newest_pub}</lastBuildDate>',
+        '    <lastBuildDate>' + now_utc.strftime("%a, %d %b %Y %H:%M:%S +0000") + '</lastBuildDate>',
         '    <generator>M5 Morning Brief (Hermes Agent)</generator>',
         '    <ttl>60</ttl>',
-        f'    <itunes:image href="{FEED_COVER_URL}"/>',
+        '    <itunes:image href="https://ronyoder31-maker.github.io/M5-Morning-Brief/cover.jpg"/>',
         f'    <itunes:author>{owner_name}</itunes:author>',
         '    <itunes:type>episodic</itunes:type>',
         f'    <itunes:summary>{channel_desc}</itunes:summary>',
@@ -864,11 +867,19 @@ def generate_feed_xml(episodes_to_include):
         '    <itunes:explicit>false</itunes:explicit>',
         '    <itunes:category text="Technology"/>',
         # atom:link rel="self" with exact stable download URL (FIX 1) 
-        f'    <atom:link href="{FEED_DL_URL}" rel="self" type="application/rss+xml"/>',
+        f'    <atom:link href="{PAGES_FEED_URL}" rel="self" type="application/rss+xml"/>',
     ]
     
+    seen_guids = set()
     for idx, ep in enumerate(episodes_to_include):
         ep_date = ep["date"]
+        guid = ep.get("tag", ep_date)
+        size = str(ep.get("file_size", ""))
+        # Apple Podcasts rejects duplicate GUIDs and non-numeric enclosure lengths
+        if guid in seen_guids or not size.isdigit():
+            log(f"Feed: skipping {guid} (duplicate or unknown file size '{size}')")
+            continue
+        seen_guids.add(guid)
         title_text = f"M5 Morning Brief - {ep['date']}"
         duration_str = ep.get("duration", "?")  # HH:MM:SS from ffprobe
         
@@ -881,11 +892,9 @@ def generate_feed_xml(episodes_to_include):
             f'      <pubDate>{ep.get("pub_rfc822", newest_pub)}</pubDate>',
             # Plain Python string — no shell quoting artifacts (FIX 4)
             f'      <description>M5 Morning Brief daily tech and AI news, hosted by Maya and Adam (MAYA=af_heart / ADAM=am_adam) — no silence padding. Episode: {ep_date}.</description>',
-            f'      <enclosure url="{ep.get("m4a_url", "")}" type="audio/m4a" length="{ep.get("file_size", "?")}"/>',
-            f'      <itunes:duration>{duration_str}</itunes:duration>',  # HH:MM:SS only (FIX 5)
+            f'      <enclosure url="{ep.get("m4a_url", "")}" type="audio/x-m4a" length="{size}"/>',
+            f'      <itunes:duration>{duration_str if duration_str != "?" else "00:00:00"}</itunes:duration>',  # HH:MM:SS only (FIX 5)
             '      <itunes:explicit>false</itunes:explicit>',
-            '      <itunes:season>1</itunes:season>',
-            f'      <itunes:episode>{idx + 1}</itunes:episode>',
             f'      <itunes:title>{title_text}</itunes:title>',
             # Real <![CDATA[ ... ]]> block (FIX 6)
             f'      <content:encoded><![CDATA[M5 Morning Brief daily tech and AI news for {ep_date} - Deep-dives into tech, AI, and innovation.]]></content:encoded>',
@@ -1143,7 +1152,8 @@ def run_pipeline():
     recent_eps = get_last_7_episodes()
     
     # Add today's episode to list
-    all_eps = [e for e in recent_eps if e["m4a_path"]]
+    # Drop any release already tagged for today (re-runs) so it is never listed twice
+    all_eps = [e for e in recent_eps if e.get("date") != TODAY]
     
     release_tag = f"mb-{TODAY}"
     gh_release_url = f"https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/{release_tag}/episode_final.m4a"
@@ -1154,12 +1164,14 @@ def run_pipeline():
         "duration": f"{int(m4a_duration)//3600:02d}:{(int(m4a_duration)%3600)//60:02d}:{int(m4a_duration)%60:02d}",
         "pub_rfc822": now_utc.strftime("%a, %d %b %Y %H:%M:%S +0000"),
         "m4a_url": gh_release_url,
+        "tag": release_tag,
+        "file_size": str(os.path.getsize(m4a_path)) if m4a_path and os.path.exists(m4a_path) else "?",
         "localPath": EPISODE_DIR,
         "m4a_path": m4a_path,
     }
     
     if today_ep["m4a_path"] and os.path.exists(today_ep["m4a_path"]):
-        all_eps.append(today_ep)
+        all_eps.insert(0, today_ep)  # newest first
 
     # Generate feed.xml
     feed_content = generate_feed_xml(all_eps)
@@ -1172,7 +1184,7 @@ def run_pipeline():
     # Publish to GitHub
     publish_ok = False
     try:
-        episodes_for_publish = [today_ep] + all_eps[:6]  # include current + 6 previous
+        episodes_for_publish = all_eps  # today first, already de-duplicated
         publish_ok = publish_to_github(episodes_for_publish, cover_jpg)
         
         if publish_ok:
