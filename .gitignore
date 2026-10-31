@@ -7,3 +7,5 @@ _cleanup-*/
 run_m5.sh
 m5_final.py
 m5_p*.log
+*.bak*
+mb-*/
