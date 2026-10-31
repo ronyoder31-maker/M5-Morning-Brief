@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.DS_Store
+*_bak*
+_backup/
+_cleanup-*/
+run_m5.sh
+m5_final.py
+m5_p*.log
