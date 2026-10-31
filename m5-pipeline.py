@@ -48,7 +48,7 @@ os.makedirs(seg_dir, exist_ok=True)
 for old in glob.glob(os.path.join(seg_dir, "*")):
     if os.path.isfile(old): os.remove(old)
 
-VOICE_MAP = {"A": "en-US-AvaNeural", "B": "en-US-GuyNeural"}
+VOICE_MAP = {"A": "en-US-AvaNeural", "B": "en-US-AndrewMultilingualNeural"}
 
 async def render_all():
     """Render dialogue via edge-tts. FIXED: no rate parameter (removed '+\-5%')."""

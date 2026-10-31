@@ -7,7 +7,7 @@ Schedule via cron job 8565f2adb48b at 01:00 Europe/Berlin daily.
 NO SILENCE PADDING: Length comes only from real content (2,800-3,200 words).
 Never pad with silence, loop, or repeat audio to meet a target.
 
-TTS priority: Kokoro (af_heart/am_adam; MAYA→af_heat, ADAM→am_adam) → edge-tts fallback (Ava/Brian).
+TTS priority: Kokoro (af_heart/am_michael; MAYA→af_heat, ADAM→am_michael) → edge-tts fallback (Ava/Andrew).
 """
 import os, sys, json, glob, math, shutil, subprocess as sp, textwrap, time
 import datetime, hashlib, re, uuid, random, copy
@@ -35,7 +35,7 @@ SD_API_TIMEOUT = 300
 
 # Voices - Kokoro (AF/AM) or edge-tts fallback
 EDGE_FEMALE_VOICE = "en-US-AvaMultilingualNeural"
-EDGE_MALE_VOICE = "en-US-BrianNeural"
+EDGE_MALE_VOICE = "en-US-AndrewMultilingualNeural"
 TTS_MODE = None
 
 FAILURES_FILE = os.path.join(EPISODE_DIR, "FAILURES.txt")
@@ -329,11 +329,11 @@ def render_with_kokoro(script_lines):
         if prefix_text == "MAYA":
             voice = "af_heart"
         elif prefix_text == "ADAM":
-            voice = "am_adam"
+            voice = "am_michael"
         elif prefix_text == "A":  # fallback old format
             voice = "af_heart"
         elif prefix_text == "B":  # fallback old format
-            voice = "am_adam"
+            voice = "am_michael"
         else:
             voice = "af_heart"  # default fallback A
         segments.append((voice, text))
@@ -428,12 +428,12 @@ def render_audio(dialogue_lines, tts_rate=None):
     ok = check_kokoro_availability()
 
     if ok:
-        log("Using Kokoro TTS with voices af_heart/am_adam...")
+        log("Using Kokoro TTS with voices af_heart/am_michael...")
         wav_dir = render_with_kokoro(dialogue_lines)
         count = len(glob.glob(os.path.join(wav_dir, "*.wav")))
     else:
         rate = tts_rate or "+0%"
-        log(f"Kokoro unavailable -- using edge-tts fallback (Ava/Brian) at rate {rate}")
+        log(f"Kokoro unavailable -- using edge-tts fallback (Ava/Andrew) at rate {rate}")
         wav_dir = render_with_edge_tts(dialogue_lines, rate)
         count = len(glob.glob(os.path.join(wav_dir, "*.wav")))
 
@@ -891,7 +891,7 @@ def generate_feed_xml(episodes_to_include):
             '      <dc:creator>Ronny Yoder</dc:creator>',
             f'      <pubDate>{ep.get("pub_rfc822", newest_pub)}</pubDate>',
             # Plain Python string — no shell quoting artifacts (FIX 4)
-            f'      <description>M5 Morning Brief daily tech and AI news, hosted by Maya and Adam (MAYA=af_heart / ADAM=am_adam) — no silence padding. Episode: {ep_date}.</description>',
+            f'      <description>M5 Morning Brief daily tech and AI news, hosted by Maya and Adam (MAYA=af_heart / ADAM=am_michael) — no silence padding. Episode: {ep_date}.</description>',
             f'      <enclosure url="{ep.get("m4a_url", "")}" type="audio/x-m4a" length="{size}"/>',
             f'      <itunes:duration>{duration_str if duration_str != "?" else "00:00:00"}</itunes:duration>',  # HH:MM:SS only (FIX 5)
             '      <itunes:explicit>false</itunes:explicit>',
