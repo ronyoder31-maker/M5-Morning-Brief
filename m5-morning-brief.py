@@ -101,6 +101,16 @@ def fetch_rss(url, retries=2):
             time.sleep(2 ** i)
     return None
 
+def _clean_summary(raw):
+    """Plain-text summary from an RSS description (HTML stripped, ~500 chars)."""
+    import html as _html
+    txt = re.sub(r"<[^>]+>", " ", raw or "")
+    txt = _html.unescape(re.sub(r"\s+", " ", txt)).strip()
+    if txt.lower().startswith(("article url", "comments url")):
+        return ""  # Hacker News descriptions are just links
+    return txt[:500]
+
+
 def parse_rss(name, data):
     items = []
     if not data:
@@ -120,16 +130,18 @@ def parse_rss(name, data):
                 link_el = e.find(f"{ns_atom}link")
                 l = (getattr(link_el, 'href', '') or getattr(getattr(link_el, 'attrib', dict()) if hasattr(link_el, 'attrib') else dict(), 'get', lambda x: '')('href'))[:300] if link_el is not None else ""
                 ts = (e.findtext(f"{ns_atom}published") or e.findtext(f"{ns_atom}updated") or "").split(".")[0]
+                summ = _clean_summary(e.findtext(f"{ns_atom}summary") or e.findtext(f"{ns_atom}content") or "")
                 if t and t != "(null)":
-                    items.append({"source": name, "title": t, "url": l, "published": ts})
+                    items.append({"source": name, "title": t, "url": l, "published": ts, "summary": summ})
         else:
             for it in root.findall(".//item"):
                 t = (it.findtext("title") or "").strip()
                 link_el = it.find("link")
                 l = (getattr(link_el, 'text', '')[:300] if link_el is not None else "")
                 ts = (it.findtext("pubDate") or "").strip()
+                summ = _clean_summary(it.findtext("description") or "")
                 if t:
-                    items.append({"source": name, "title": t, "url": l or "", "published": ts})
+                    items.append({"source": name, "title": t, "url": l or "", "published": ts, "summary": summ})
     except Exception as e:
         fail(f"RSS parse error for {name}: {e}", "parse_rss")
     return items
@@ -166,108 +178,154 @@ def parse_timestamp(ts_str):
 
 
 # ======== LLM Dialogue Generation ========
-def generate_dialogue(stories):
-    log("Generating dialogue script via Ollama...")
-    os.makedirs(EPISODE_DIR, exist_ok=True)
+OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+SCRIPT_MODEL = "qwen3.8:27b-mlx"
+STORY_COUNT = 8            # stories per episode (one extra allowed if still short)
+STORY_MIN_WORDS = 260      # a story segment shorter than this is retried
+TARGET_WORDS = 3000        # ~19 min at normal pace; keep adding stories until reached
+MAX_WORDS = 4000
 
-    story_list = []
-    for i, s in enumerate(stories[:15]):
-        pub = (s.get("published") or "?")[:16] if s.get("published") else "?"
-        entry = f"{i+1}. [{s['source']}] {pub} | {s['title']}"
-        story_list.append(entry)
 
-    stories_text = "\n".join(story_list)
+def _ollama(prompt, num_predict=2500, temperature=0.7, timeout=900):
+    """One Ollama call with thinking OFF, so the whole token budget goes to the script."""
+    payload = json.dumps({
+        "model": SCRIPT_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "think": False,
+        "keep_alive": "15m",
+        "options": {"temperature": temperature, "num_predict": num_predict, "num_ctx": 16384},
+    })
+    req = Request(OLLAMA_URL, data=payload.encode(), headers={"Content-Type": "application/json"})
+    resp = urlopen(req, timeout=timeout)
+    result = json.loads(resp.read().decode())
+    text = result.get("response", "") or ""
+    # Strip any stray <think>...</think> block some models still emit
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
 
+
+def _dialogue_lines(text):
+    out = []
+    for l in text.split("\n"):
+        l = l.strip().replace("**", "")
+        if l.startswith("MAYA:") or l.startswith("ADAM:"):
+            who, said = l.split(":", 1)
+            said = said.strip()
+            if said:
+                out.append(f"{who}: {said}")
+    return out
+
+
+def _story_line(s):
+    pub = (s.get("published") or "?")[:16]
+    summ = (s.get("summary") or "").strip()
+    return f"[{s['source']}] {pub} | {s['title']}" + (f"\n   Summary: {summ}" if summ else "")
+
+
+def _pick_stories(stories):
+    """Ask the model to choose the best stories (fast, small call). Falls back to newest."""
+    pool = stories[:20]
+    listing = "\n".join(f"{i+1}. {_story_line(s)}" for i, s in enumerate(pool))
     prompt = (
-        "You are writing a two-host podcast script for M5 Morning Brief, a daily tech and AI news podcast.\n\n"
-        f"TODAY's date: {TODAY}\n\n"
-        "SELECT the 8-10 most important/interesting TECH and AI stories from this list of fresh items (last 24 hours):\n"
-        f"{stories_text}\n\n"
-        "Write an alternating dialogue script between:\n"
-        "- MAYA (warm, curious host who asks the questions listeners would ask) — lines start with 'MAYA: '\n"
-        "- ADAM (calm host who explains tech in plain words) — lines start with 'ADAM: '\n\n"
-        "CRITICAL REQUIREMENTS:\n"
-        "1. Exactly 8-10 stories, each covered with ~7-9 MAYA/ADAM pairs. TOTAL MUST NOT EXCEED 75 dialogue lines.\n"
-        "2. Target 3,000 to 4,000 words total — exactly on target, no more. NEVER exceed 4,000 words.\n"
-        "3. Each line must be substantial — minimum 80 words per MAYA/ADAM line.\n"
-        "4. Open with: 'Good morning, this is the M5 Morning Brief. I'm Maya.' / 'And I'm Adam.' then the date.\n"
-        "5. End with a short sign-off from both by name (e.g. 'I'm Maya.' / 'And I'm Adam — see you tomorrow.').\n"
-        "6. They should call each other by name naturally here and there, not every line.\n"
-        "7. Format EXACTLY: 'MAYA: text' or 'ADAM: text' per line — no other prefix, no extra text, no numbered lists. Your opening MUST start with the greeting lines exactly as shown.\n\n"
-        "WRITE THE COMPLETE FULL SCRIPT NOW:"
+        f"From this list of fresh tech news items, choose the {STORY_COUNT + 3} most important or interesting "
+        "TECH and AI stories for a daily podcast, best first. Skip duplicates of the same story, deals/sales posts and "
+        "non-tech items. Reply with ONLY the numbers, comma-separated, e.g. 4, 1, 9\n\n" + listing
     )
+    try:
+        text = _ollama(prompt, num_predict=100, temperature=0.2, timeout=300)
+        nums = []
+        for n in re.findall(r"\d+", text):
+            k = int(n) - 1
+            if 0 <= k < len(pool) and k not in nums:
+                nums.append(k)
+        if len(nums) >= STORY_COUNT:
+            log(f"Model picked stories: {[k + 1 for k in nums]}")
+            return [pool[k] for k in nums]
+    except Exception as e:
+        log(f"Story pick failed ({e}); using newest stories.")
+    return pool
 
-    ollama_url = "http://127.0.0.1:11434/api/generate"
 
-    max_attempts = 3
-    script_text = ""
-    for attempt in range(max_attempts):
+def _write_story(s, idx, total, prev_titles):
+    prompt = (
+        "You are writing ONE segment of M5 Morning Brief, a daily two-host tech and AI news podcast.\n"
+        f"Today's date: {TODAY}. This is story {idx} of about {total}.\n\n"
+        f"STORY:\n{_story_line(s)}\n\n"
+        "Hosts:\n"
+        "- MAYA: warm, curious, asks the questions a listener would ask.\n"
+        "- ADAM: calm, explains the tech in plain words and why it matters.\n\n"
+        "Write 7 or 8 alternating lines, starting with MAYA introducing the story (a natural transition, "
+        "not a greeting). Total 360 to 440 words; each line 40 to 75 words. Cover what happened, why it matters, "
+        "and what to watch next. Stick to what the headline and summary say; do not invent numbers, quotes or dates. "
+        "Use each other's names only occasionally. Do NOT greet listeners or sign off.\n"
+        + (f"Already covered earlier in the episode (don't repeat): {'; '.join(prev_titles[-4:])}\n" if prev_titles else "")
+        + "\nFormat EXACTLY one line per turn: 'MAYA: text' or 'ADAM: text'. No headings, no stage directions, nothing else."
+    )
+    best = []
+    for attempt in range(3):
         try:
-            payload = json.dumps({
-                "model": "qwen3.8:27b-mlx",
-                "prompt": prompt,
-                "stream": False,
-                "think": True,
-                "keep_alive": "5m",
-                "options": {"temperature": 0.7, "num_predict": 20000, "num_ctx": 32768}
-            })
-
-            req = Request(ollama_url, data=payload.encode(), headers={"Content-Type": "application/json"})
-            resp = urlopen(req, timeout=2400)
-            result = json.loads(resp.read().decode())
-            script_text = result.get("response", "")
-
-            if len(script_text.strip()) < 1000:
-                log(f"Script too short ({len(script_text)} chars), will retry with updated attempt.")
-                continue
-
-            lines = script_text.split("\n")
-            valid_lines = [l for l in lines if l.startswith("MAYA: ") or l.startswith("ADAM: ")]
-            word_count = len(script_text.split())
-            log(f"Attempt {attempt + 1}: {word_count} words, {len(valid_lines)} dialogue lines")
-
-            if word_count >= 3000 and len(valid_lines) > 60:
+            lines = _dialogue_lines(_ollama(prompt))
+            words = sum(len(l.split()) for l in lines)
+            log(f"  Story {idx} attempt {attempt + 1}: {words} words, {len(lines)} lines")
+            if words > sum(len(l.split()) for l in best):
+                best = lines
+            if words >= STORY_MIN_WORDS and len(lines) >= 5:
                 break
-
         except Exception as e:
-            log(f"LLM error attempt {attempt + 1}: {e}. Will retry if attempts remain.")
-            if attempt < max_attempts - 1:
-                log(f"Sleeping 5 seconds before retry...")
-                time.sleep(5)
-                continue
-            else:
-                log("All LLM attempts exhausted. Falling back to fallback script.")
+            log(f"  Story {idx} attempt {attempt + 1} error: {e}")
+            time.sleep(5)
+    return best
 
-    # Extract clean dialogue lines from whatever we got
-    if script_text:
-        lines = script_text.split("\n")
-        valid_lines = [l for l in lines if l.strip().startswith("MAYA: ") or l.strip().startswith("ADAM: ") or l.strip().startswith("A: ") or l.strip().startswith("B: ")]
+
+def generate_dialogue(stories):
+    """Write the script one story at a time (thinking off), so length is reliable."""
+    log("Generating dialogue script via Ollama (one story at a time)...")
+    os.makedirs(EPISODE_DIR, exist_ok=True)
+    try:
+        nice_date = datetime.date.today().strftime("%A, %B %-d, %Y")
+    except Exception:
+        nice_date = TODAY
+
+    lines = [
+        "MAYA: Good morning, this is the M5 Morning Brief. I'm Maya.",
+        f"ADAM: And I'm Adam. It's {nice_date}, and we've got the biggest tech and AI stories of the last day for you.",
+    ]
+    picked = _pick_stories(stories)
+    covered, words = [], 0
+    for s in picked:
+        # Stop once the episode is long enough (~19-21 min), or at the story cap
+        if words >= TARGET_WORDS + 200 or len(covered) >= STORY_COUNT + 1:
+            break
+        if len(covered) >= STORY_COUNT and words >= TARGET_WORDS:
+            break
+        if words >= MAX_WORDS - 450:
+            break
+        seg = _write_story(s, len(covered) + 1, STORY_COUNT, [c["title"] for c in covered])
+        if not seg:
+            log(f"  Skipping story (no usable text): {s['title']}")
+            continue
+        lines.extend(seg)
+        covered.append(s)
+        words = sum(len(l.split()) for l in lines)
+        log(f"Running total: {words} words after {len(covered)} stories")
+
+    if not covered:
+        log("All LLM attempts failed. Falling back to fallback script.")
+        lines = generate_fallback_script(stories)
     else:
-        valid_lines = generate_fallback_script(stories)
+        lines += [
+            "MAYA: That's the M5 Morning Brief for today. Thanks for listening. I'm Maya.",
+            "ADAM: And I'm Adam. See you tomorrow.",
+        ]
 
-    # Hard cap to prevent runaway episodes: 75 max dialogue lines (~19 min at normal pace)
-    MAX_LINES = 75
-    if len(valid_lines) > MAX_LINES:
-        log(f"Truncating dialogue from {len(valid_lines)} to {MAX_LINES} lines (max)")
-        valid_lines = valid_lines[:MAX_LINES]
-
-    # Recompute word count after capping for accurate rate calculation
-    truncated_script = "\n".join(valid_lines)
-    word_count = len(truncated_script.split()) if truncated_script else 0
-    log(f"Script: {word_count} words, {len(valid_lines)} dialogue lines (after cap)")
-
-    # Dynamic TTS rate to hit ~19 min target regardless of Ollama output length
-    # Normal speech ≈ 160 wpm; rate X% → effective_wpm = 160 * (1 + X/100)
-    # Target: words / effective_wpm = 19 → X = words/(160*19)*100 - 100
-    target_min = 19.0
-    raw_rate_divisor = 160 * target_min
-    calc_rate = (word_count / max(raw_rate_divisor, 1)) * 100 - 100
-    # Clamp between -5% and +80% to keep natural speech speeds
-    calc_rate = max(-10.0, min(10.0, calc_rate))
-    TTS_RATE = f"{int(round(calc_rate)):+d}%"
-    log(f"Dynamic TTS rate calculated: {TTS_RATE} (for {word_count} words → target {target_min} min)")
-
-    return valid_lines, truncated_script
+    script = "\n".join(lines)
+    with open(os.path.join(EPISODE_DIR, "script.txt"), "w") as f:
+        f.write(script + "\n")
+    word_count = len(script.split())
+    log(f"Script: {word_count} words, {len(lines)} dialogue lines, {len(covered)} stories")
+    if word_count < 2200:
+        fail(f"Script short: {word_count} words from {len(covered)} stories", "dialogue")
+    return lines, script
 
 
 def generate_fallback_script(stories):
