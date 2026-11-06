@@ -12,3 +12,5 @@ Nov 2, 2026 (Hark, approved by Ronny): script writing rewritten
 • The greeting and sign-off are fixed text (Maya / Adam). The full script is saved to script.txt in the episode folder.
 • RSS items now carry a short plain-text summary, so the hosts have facts beyond the headline (HN link-only descriptions are skipped).
 • Model is still qwen3.8:27b-mlx. Validation is still MAYA:/ADAM: lines.
+
+Nov 6, 2026 (Hark, approved by Ronny): feed keeps the last 7 episodes. get_last_7_episodes now calls gh with -R ronyoder31-maker/M5-Morning-Brief and --json. Before, the cron run did not start inside the repo, so gh returned nothing and feed.xml held only the newest episode. itunes:duration is left out when it is unknown. feed.xml was rebuilt by hand with 7 episodes.

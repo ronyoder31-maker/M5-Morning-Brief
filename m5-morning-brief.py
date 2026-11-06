@@ -983,7 +983,7 @@ def generate_feed_xml(episodes_to_include):
             # Plain Python string — no shell quoting artifacts (FIX 4)
             f'      <description>M5 Morning Brief daily tech and AI news, hosted by Maya and Adam (MAYA=af_heart / ADAM=am_michael) — no silence padding. Episode: {ep_date}.</description>',
             f'      <enclosure url="{ep.get("m4a_url", "")}" type="audio/x-m4a" length="{size}"/>',
-            f'      <itunes:duration>{duration_str if duration_str != "?" else "00:00:00"}</itunes:duration>',  # HH:MM:SS only (FIX 5)
+            *([f'      <itunes:duration>{duration_str}</itunes:duration>'] if duration_str != "?" else []),  # omit when unknown
             '      <itunes:explicit>false</itunes:explicit>',
             f'      <itunes:title>{title_text}</itunes:title>',
             # Real <![CDATA[ ... ]]> block (FIX 6)
@@ -1006,88 +1006,75 @@ def generate_feed_xml(episodes_to_include):
 
 
 def get_last_7_episodes():
-    """Fetch last 7 days of episodes from GitHub releases (back catalog)."""
+    """Back catalog for the feed: the 7 newest mb-YYYY-MM-DD releases on GitHub.
+
+    Uses `gh ... -R owner/repo --json` so it works from any working directory
+    (the cron run does not start inside the repo, which left the feed with only
+    today's episode) and does not depend on gh's table columns.
+    """
     import subprocess as sp, json
-    
-    gh_cmd = ["gh", "release", "list", "--limit", "20"]
-    r = sp.run(gh_cmd, capture_output=True, text=True)
-    
+    repo = "ronyoder31-maker/M5-Morning-Brief"
+    r = sp.run(["gh", "release", "list", "-R", repo, "--limit", "30",
+                "--json", "tagName,publishedAt,isDraft"], capture_output=True, text=True)
     if r.returncode != 0 or not r.stdout.strip():
-        log("WARNING: No GitHub releases found; empty feed")
+        log(f"WARNING: gh release list failed ({r.returncode}): {r.stderr.strip()[:300]}; feed will only have today's episode")
         return []
-    
-    cutoff_date = datetime.datetime.now(datetime.timezone.utc).date() - datetime.timedelta(days=7)
+    try:
+        rels = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        log("WARNING: could not parse gh release list JSON")
+        return []
+
     episodes = []
-    
-    for line in r.stdout.strip().split("\n"):
-        if not line.strip(): continue
-        parts = line.strip().split("\t")
-        if len(parts) < 4: continue
-        
-        tag = parts[2]           # Column 2 = release tag (e.g. mb-2026-10-30)
-        raw_published = parts[3] # Column 3 = ISO datetime
-        
-        ep_date = tag.replace("mb-", "")
-        try:
-            ep_dt = datetime.datetime.strptime(ep_date, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
-        except ValueError:
+    for rel in rels:
+        tag = rel.get("tagName", "")
+        if rel.get("isDraft") or not re.fullmatch(r"mb-\d{4}-\d{2}-\d{2}", tag):
             continue
-        
-        # Only include within 7-day window (FIX 2: back catalog)
-        if ep_dt.date() < cutoff_date:
-            continue
-        
+        ep_date = tag[3:]
+        ep_dt = datetime.datetime.strptime(ep_date, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
         try:
-            pub_dt = datetime.datetime.fromisoformat(raw_published.replace("Z", "+00:00")).replace(tzinfo=datetime.timezone.utc)
+            pub_dt = datetime.datetime.fromisoformat(rel.get("publishedAt", "").replace("Z", "+00:00"))
         except ValueError:
             pub_dt = ep_dt
-        
-        # Get enclosure URL + size from GitHub release assets
-        m4a_url = f"https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/{tag}/episode_final.m4a"
+        m4a_url = f"https://github.com/{repo}/releases/download/{tag}/episode_final.m4a"
         file_size = ""
-        av_r = sp.run(["gh", "release", "view", tag, "--json", "assets"], capture_output=True, text=True)
-        if av_r.returncode == 0:
+        av = sp.run(["gh", "release", "view", tag, "-R", repo, "--json", "assets"], capture_output=True, text=True)
+        if av.returncode == 0:
             try:
-                for a in json.loads(av_r.stdout).get("assets", []):
-                    if "episode_final.m4a" in a.get("name", ""):
-                        m4a_url = a["browser_download_url"]
-                        file_size = str(a["size"])
+                for a in json.loads(av.stdout).get("assets", []):
+                    if a.get("name") == "episode_final.m4a":
+                        m4a_url = a.get("url") or a.get("browser_download_url") or m4a_url
+                        file_size = str(a.get("size", ""))
             except (json.JSONDecodeError, KeyError):
                 pass
-        
-        pub_rfc822 = pub_dt.strftime("%a, %d %b %Y %H:%M:%S +0000")  # RFC 822 (FIX 3)
-        
+        if not file_size.isdigit():
+            log(f"Feed: {tag} has no episode_final.m4a asset, skipping")
+            continue
         episodes.append({
             "tag": tag,
             "date": ep_date,
-            "pub_rfc822": pub_rfc822,
+            "pub_rfc822": pub_dt.astimezone(datetime.timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000"),
             "ep_dt": ep_dt,
-            "title": f"M5 Morning Brief - {ep_dt.strftime('%B %d, %Y')}",
             "m4a_url": m4a_url,
-            "file_size": file_size if file_size else "?",
+            "file_size": file_size,
         })
-    
-    # Sort by actual datetime (not string) newest-first
+
     episodes.sort(key=lambda e: e["ep_dt"], reverse=True)
-    
-    # Compute duration from local audio files via ffprobe
+    episodes = episodes[:7]
+
+    # Duration from the local copy when it still exists
     for ep in episodes:
-        local_m4a = os.path.expanduser(f"~/Podcasts/M5 Morning Brief/{ep['date']}/episode_final.m4a")
+        local_m4a = os.path.join(BASE_DIR, ep["date"], "episode_final.m4a")
         if os.path.exists(local_m4a):
-            dur_out = sp.run(["ffprobe", "-v", "error", "-show_entries",
-                    "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", local_m4a],
-                    capture_output=True, text=True)
-            if dur_out.returncode == 0 and dur_out.stdout.strip():
-                try:
-                    secs = float(dur_out.stdout.strip())
-                    h = int(secs // 3600)
-                    m = int((secs % 3600) // 60)
-                    s = int(secs % 60)
-                    ep["duration"] = f"{h:02d}:{m:02d}:{s:02d}"  # HH:MM:SS (FIX 5)
-                except ValueError:
-                    pass
-    
-    log(f"Feed will include {len(episodes)} recent episodes from GitHub releases")
+            d = sp.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                        "-of", "default=noprint_wrappers=1:nokey=1", local_m4a], capture_output=True, text=True)
+            try:
+                secs = int(float(d.stdout.strip()))
+                ep["duration"] = f"{secs//3600:02d}:{(secs%3600)//60:02d}:{secs%60:02d}"
+            except ValueError:
+                pass
+
+    log(f"Feed will include {len(episodes)} back-catalog episodes from GitHub releases")
     return episodes
 
 # ======== Main Pipeline ========
