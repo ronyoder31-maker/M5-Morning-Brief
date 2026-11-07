@@ -6,8 +6,8 @@
     <description>M5 Morning Brief -- daily tech and AI news podcast hosted by Ronny Yoder. Covering the most important tech and AI stories from The Verge, Ars Technica, TechCrunch, Engadget, Wired, MacRumors, Hacker News, VentureBeat, EFF, and other leading sources.</description>
     <language>en-us</language>
     <copyright>(C) 2026 Ronny Yoder</copyright>
-    <pubDate>Fri, 06 Nov 2026 00:21:27 +0000</pubDate>
-    <lastBuildDate>Fri, 06 Nov 2026 05:29:33 +0000</lastBuildDate>
+    <pubDate>Sat, 07 Nov 2026 00:00:54 +0000</pubDate>
+    <lastBuildDate>Sat, 07 Nov 2026 00:07:21 +0000</lastBuildDate>
     <generator>M5 Morning Brief (Hermes Agent)</generator>
     <ttl>60</ttl>
     <itunes:image href="https://ronyoder31-maker.github.io/M5-Morning-Brief/cover.jpg"/>
@@ -22,11 +22,24 @@
     <itunes:category text="Technology"/>
     <atom:link href="https://ronyoder31-maker.github.io/M5-Morning-Brief/feed.xml" rel="self" type="application/rss+xml"/>
     <item>
+      <title>M5 Morning Brief - 2026-11-07</title>
+      <link>https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/tag/mb-2026-11-07</link>
+      <guid isPermaLink="false">mb-2026-11-07</guid>
+      <dc:creator>Ronny Yoder</dc:creator>
+      <pubDate>Sat, 07 Nov 2026 00:00:54 +0000</pubDate>
+      <description>M5 Morning Brief daily tech and AI news, hosted by Maya and Adam (MAYA=af_heart / ADAM=am_michael) — no silence padding. Episode: 2026-11-07.</description>
+      <enclosure url="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-11-07/episode_final.m4a" type="audio/x-m4a" length="11556637"/>
+      <itunes:duration>00:21:08</itunes:duration>
+      <itunes:explicit>false</itunes:explicit>
+      <itunes:title>M5 Morning Brief - 2026-11-07</itunes:title>
+      <content:encoded><![CDATA[M5 Morning Brief daily tech and AI news for 2026-11-07 - Deep-dives into tech, AI, and innovation.]]></content:encoded>
+    </item>
+    <item>
       <title>M5 Morning Brief - 2026-11-06</title>
       <link>https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/tag/mb-2026-11-06</link>
       <guid isPermaLink="false">mb-2026-11-06</guid>
       <dc:creator>Ronny Yoder</dc:creator>
-      <pubDate>Fri, 06 Nov 2026 00:21:27 +0000</pubDate>
+      <pubDate>Fri, 06 Nov 2026 00:29:08 +0000</pubDate>
       <description>M5 Morning Brief daily tech and AI news, hosted by Maya and Adam (MAYA=af_heart / ADAM=am_michael) — no silence padding. Episode: 2026-11-06.</description>
       <enclosure url="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-11-06/episode_final.m4a" type="audio/x-m4a" length="11389769"/>
       <itunes:duration>00:20:49</itunes:duration>
@@ -107,7 +120,6 @@
       <pubDate>Fri, 30 Oct 2026 00:51:17 +0000</pubDate>
       <description>M5 Morning Brief daily tech and AI news, hosted by Maya and Adam (MAYA=af_heart / ADAM=am_michael) — no silence padding. Episode: 2026-10-30.</description>
       <enclosure url="https://github.com/ronyoder31-maker/M5-Morning-Brief/releases/download/mb-2026-10-30/episode_final.m4a" type="audio/x-m4a" length="13758260"/>
-      <itunes:duration>00:19:00</itunes:duration>
       <itunes:explicit>false</itunes:explicit>
       <itunes:title>M5 Morning Brief - 2026-10-30</itunes:title>
       <content:encoded><![CDATA[M5 Morning Brief daily tech and AI news for 2026-10-30 - Deep-dives into tech, AI, and innovation.]]></content:encoded>
