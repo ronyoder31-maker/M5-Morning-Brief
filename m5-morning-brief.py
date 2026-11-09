@@ -182,6 +182,7 @@ OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 SCRIPT_MODEL = "qwen3.8:27b-mlx"
 STORY_COUNT = 8            # stories per episode (one extra allowed if still short)
 STORY_MIN_WORDS = 260      # a story segment shorter than this is retried
+STORY_MAX_WORDS = 650      # a segment longer than this is retried, and never kept over a shorter one
 TARGET_WORDS = 3000        # ~19 min at normal pace; keep adding stories until reached
 MAX_WORDS = 3500         # ~21 min; hard stop so the ceiling is never hit
 
@@ -267,9 +268,12 @@ def _write_story(s, idx, total, prev_titles):
             lines = _dialogue_lines(_ollama(prompt))
             words = sum(len(l.split()) for l in lines)
             log(f"  Story {idx} attempt {attempt + 1}: {words} words, {len(lines)} lines")
-            if words > sum(len(l.split()) for l in best):
+            # Keep the longest attempt that fits under the cap; an overlong one only if nothing fits
+            best_w = sum(len(l.split()) for l in best)
+            fits, best_fits = words <= STORY_MAX_WORDS, best_w <= STORY_MAX_WORDS
+            if (fits and (not best_fits or words > best_w)) or (not best and not fits) or (not fits and not best_fits and words < best_w):
                 best = lines
-            if words >= STORY_MIN_WORDS and len(lines) >= 5:
+            if STORY_MIN_WORDS <= words <= STORY_MAX_WORDS and len(lines) >= 5:
                 break
         except Exception as e:
             log(f"  Story {idx} attempt {attempt + 1} error: {e}")
