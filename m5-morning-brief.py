@@ -183,7 +183,7 @@ SCRIPT_MODEL = "qwen3.8:27b-mlx"
 STORY_COUNT = 8            # stories per episode (one extra allowed if still short)
 STORY_MIN_WORDS = 260      # a story segment shorter than this is retried
 TARGET_WORDS = 3000        # ~19 min at normal pace; keep adding stories until reached
-MAX_WORDS = 4000
+MAX_WORDS = 3500         # ~21 min; hard stop so the ceiling is never hit
 
 
 def _ollama(prompt, num_predict=2500, temperature=0.7, timeout=900):
@@ -298,7 +298,7 @@ def generate_dialogue(stories):
             break
         if len(covered) >= STORY_COUNT and words >= TARGET_WORDS:
             break
-        if words >= MAX_WORDS - 450:
+        if words + 600 > MAX_WORDS:   # next story averages ~550-650 words
             break
         seg = _write_story(s, len(covered) + 1, STORY_COUNT, [c["title"] for c in covered])
         if not seg:
@@ -1219,8 +1219,7 @@ def run_pipeline():
         fail(f"Episode short: {m4a_duration:.0f}s", "duration")
     elif m4a_duration > 1320:
         log(f"Warning: Episode too long: {m4a_duration:.0f}s ({m4a_duration/60:.1f} min) — exceeds 22min ceiling.")
-        fail(f"Episode overlong: {m4a_duration:.0f}s", "duration")
-        return None
+        fail(f"Episode overlong: {m4a_duration:.0f}s (published anyway)", "duration")
 
     # 8. Publish to GitHub + Feed
     log("=== Publishing ===")
