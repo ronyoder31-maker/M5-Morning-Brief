@@ -14,3 +14,10 @@ Nov 2, 2026 (Hark, approved by Ronny): script writing rewritten
 • Model is still qwen3.8:27b-mlx. Validation is still MAYA:/ADAM: lines.
 
 Nov 6, 2026 (Hark, approved by Ronny): feed keeps the last 7 episodes. get_last_7_episodes now calls gh with -R ronyoder31-maker/M5-Morning-Brief and --json. Before, the cron run did not start inside the repo, so gh returned nothing and feed.xml held only the newest episode. itunes:duration is left out when it is unknown. feed.xml was rebuilt by hand with 7 episodes.
+
+Nov 10, 2026 (Hark, approved by Ronny): script writing uses MTPLX first
+• Why: so only one 27B model is in RAM at 1 AM. Hermes and the script both use MTPLX (Qwen3.8-27B-MTPLX-Optimized-Speed, local port 8000), instead of MTPLX plus Ollama's qwen3.8:27b-mlx.
+• _ollama() now calls MTPLX's OpenAI-style /v1/chat/completions (max_tokens, thinking off via chat_template_kwargs, <think> stripped). The model id is read from /v1/models unless M5_MTPLX_MODEL is set.
+• If MTPLX is down or returns an error or empty text, the run logs a WARNING and uses Ollama qwen3.8:27b-mlx for the rest of that run (no switching back and forth).
+• Turn MTPLX off for the script: M5_USE_MTPLX=0. Override URL: M5_MTPLX_URL.
+• MTPLX must be running with its model started before 1 AM, or the run falls back to Ollama.

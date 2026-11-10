@@ -179,7 +179,12 @@ def parse_timestamp(ts_str):
 
 # ======== LLM Dialogue Generation ========
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
-SCRIPT_MODEL = "qwen3.8:27b-mlx"
+SCRIPT_MODEL = "qwen3.8:27b-mlx"   # Ollama fallback model
+# MTPLX first (one model in RAM, shared with Hermes); Ollama only if MTPLX is not answering.
+MTPLX_URL = os.environ.get("M5_MTPLX_URL", "http://127.0.0.1:8000/v1")
+MTPLX_MODEL = os.environ.get("M5_MTPLX_MODEL", "")   # blank = first model MTPLX lists
+USE_MTPLX = os.environ.get("M5_USE_MTPLX", "1") != "0"
+_mtplx_state = {"model": None, "down": False}
 STORY_COUNT = 8            # stories per episode (one extra allowed if still short)
 STORY_MIN_WORDS = 260      # a story segment shorter than this is retried
 STORY_MAX_WORDS = 650      # a segment longer than this is retried, and never kept over a shorter one
@@ -187,8 +192,46 @@ TARGET_WORDS = 3000        # ~19 min at normal pace; keep adding stories until r
 MAX_WORDS = 3500         # ~21 min; hard stop so the ceiling is never hit
 
 
-def _ollama(prompt, num_predict=2500, temperature=0.7, timeout=900):
-    """One Ollama call with thinking OFF, so the whole token budget goes to the script."""
+def _clean(text):
+    # Strip any stray <think>...</think> block some models still emit
+    return re.sub(r"<think>.*?</think>", "", text or "", flags=re.S).strip()
+
+
+def _mtplx_model():
+    if _mtplx_state["model"]:
+        return _mtplx_state["model"]
+    if MTPLX_MODEL:
+        _mtplx_state["model"] = MTPLX_MODEL
+    else:
+        resp = urlopen(Request(MTPLX_URL + "/models"), timeout=10)
+        data = json.loads(resp.read().decode()).get("data") or []
+        if not data:
+            raise RuntimeError("MTPLX lists no models")
+        _mtplx_state["model"] = data[0]["id"]
+    log(f"LLM backend: MTPLX ({_mtplx_state['model']})")
+    return _mtplx_state["model"]
+
+
+def _mtplx(prompt, num_predict, temperature, timeout):
+    payload = json.dumps({
+        "model": _mtplx_model(),
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": num_predict,
+        "temperature": temperature,
+        "stream": False,
+        "chat_template_kwargs": {"enable_thinking": False},
+    })
+    req = Request(MTPLX_URL + "/chat/completions", data=payload.encode(),
+                  headers={"Content-Type": "application/json", "Authorization": "Bearer local"})
+    resp = urlopen(req, timeout=timeout)
+    result = json.loads(resp.read().decode())
+    text = _clean(((result.get("choices") or [{}])[0].get("message") or {}).get("content", ""))
+    if not text:
+        raise RuntimeError("MTPLX returned empty text")
+    return text
+
+
+def _ollama_direct(prompt, num_predict, temperature, timeout):
     payload = json.dumps({
         "model": SCRIPT_MODEL,
         "prompt": prompt,
@@ -200,9 +243,19 @@ def _ollama(prompt, num_predict=2500, temperature=0.7, timeout=900):
     req = Request(OLLAMA_URL, data=payload.encode(), headers={"Content-Type": "application/json"})
     resp = urlopen(req, timeout=timeout)
     result = json.loads(resp.read().decode())
-    text = result.get("response", "") or ""
-    # Strip any stray <think>...</think> block some models still emit
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+    return _clean(result.get("response", ""))
+
+
+def _ollama(prompt, num_predict=2500, temperature=0.7, timeout=900):
+    """One LLM call with thinking OFF. Tries MTPLX first; falls back to Ollama if MTPLX is down."""
+    if USE_MTPLX and not _mtplx_state["down"]:
+        try:
+            return _mtplx(prompt, num_predict, temperature, timeout)
+        except Exception as e:
+            # Once MTPLX fails, stay on Ollama for the rest of the run (never two big models loaded mid-run back and forth)
+            _mtplx_state["down"] = True
+            log(f"WARNING: MTPLX failed ({e}); falling back to Ollama {SCRIPT_MODEL} for the rest of this run")
+    return _ollama_direct(prompt, num_predict, temperature, timeout)
 
 
 def _dialogue_lines(text):
@@ -283,7 +336,7 @@ def _write_story(s, idx, total, prev_titles):
 
 def generate_dialogue(stories):
     """Write the script one story at a time (thinking off), so length is reliable."""
-    log("Generating dialogue script via Ollama (one story at a time)...")
+    log("Generating dialogue script (MTPLX first, Ollama fallback; one story at a time)...")
     os.makedirs(EPISODE_DIR, exist_ok=True)
     try:
         nice_date = datetime.date.today().strftime("%A, %B %-d, %Y")
