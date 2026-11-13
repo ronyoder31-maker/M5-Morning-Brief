@@ -646,13 +646,17 @@ def convert_to_m4a(ep_wav):
         fail(f"AAC conversion failed: {result.stderr[:200]}", "m4a_aac")
         return None
 
-    # Tag with iTunes metadata
+    # Tag with iTunes metadata. -c:a copy: stream-copy the 128k AAC produced
+    # above instead of re-encoding -- a re-encode here (ffmpeg default) drops
+    # mono audio to ~72kbps, which is why older episodes came out under-spec.
     tagged_m4a = os.path.join(EPISODE_DIR, "tagged_ep.m4a")
     sp.run(["ffmpeg", "-y", "-i", m4a_path,
+            "-c:a", "copy",
             "-metadata", f"title=M5 Morning Brief -- {TODAY}",
             "-metadata", "artist=Ronny Yoder",
             "-metadata", f"album={ALBUM}",
             "-metadata", f"date={TODAY}",
+            "-movflags", "+faststart",
             tagged_m4a], capture_output=True, text=True, timeout=60)
 
     # Copy tagged M4A to final output

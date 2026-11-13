@@ -21,3 +21,8 @@ Nov 10, 2026 (Hark, approved by Ronny): script writing uses MTPLX first
 • If MTPLX is down or returns an error or empty text, the run logs a WARNING and uses Ollama qwen3.8:27b-mlx for the rest of that run (no switching back and forth).
 • Turn MTPLX off for the script: M5_USE_MTPLX=0. Override URL: M5_MTPLX_URL.
 • MTPLX must be running with its model started before 1 AM, or the run falls back to Ollama.
+
+Nov 13, 2026 (Hark, autonomous cron verification): M4A bitrate bug fixed
+• Bug: convert_to_m4a() encoded the WAV at -b:a 128k, but the follow-on tagging step re-encoded the audio with ffmpeg defaults (no -c:a copy), so the final episode_final.m4a landed at ffmpeg's ~72kbps mono default instead of 128kbps. Every episode through Nov 13 shipped under-spec (~72k, not 128k) even though duration/codec/tags were correct.
+• Fix: tagging step now uses -c:a copy (+ -movflags +faststart) so it stream-copies the 128k AAC and only adds metadata. Verified: step1 125685 bps -> final 125685 bps (bitrate preserved), tags intact, py_compile clean.
+• Effect: episodes from Nov 14 onward are true ~128kbps AAC @ 44.1kHz. The Nov 13 episode remains a one-time ~72k deviation (its source WAV was already cleaned up, so it can only be re-encoded to ~118k, not 128k; left as-is). Please confirm, Ronny.
