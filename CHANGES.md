@@ -22,7 +22,8 @@ Nov 10, 2026 (Hark, approved by Ronny): script writing uses MTPLX first
 • Turn MTPLX off for the script: M5_USE_MTPLX=0. Override URL: M5_MTPLX_URL.
 • MTPLX must be running with its model started before 1 AM, or the run falls back to Ollama.
 
-Nov 13, 2026 (Hark, autonomous cron verification): M4A bitrate bug fixed
+Nov 13, 2026 (Hark, autonomous cron verification): M4A bitrate bug fixed + 7-day release pruning added
 • Bug: convert_to_m4a() encoded the WAV at -b:a 128k, but the follow-on tagging step re-encoded the audio with ffmpeg defaults (no -c:a copy), so the final episode_final.m4a landed at ffmpeg's ~72kbps mono default instead of 128kbps. Every episode through Nov 13 shipped under-spec (~72k, not 128k) even though duration/codec/tags were correct.
 • Fix: tagging step now uses -c:a copy (+ -movflags +faststart) so it stream-copies the 128k AAC and only adds metadata. Verified: step1 125685 bps -> final 125685 bps (bitrate preserved), tags intact, py_compile clean.
 • Effect: episodes from Nov 14 onward are true ~128kbps AAC @ 44.1kHz. The Nov 13 episode remains a one-time ~72k deviation (its source WAV was already cleaned up, so it can only be re-encoded to ~118k, not 128k; left as-is). Please confirm, Ronny.
+• Also added: prune_old_releases() — the spec's "delete releases older than 7 days" was never implemented (only local folders were cleaned). It now deletes mb-YYYY-MM-DD releases strictly older than 7 days after a successful publish (keeps the feed's 7-newest back-catalog; only touches mb-date tags; never deletes a release the feed links to). I manually removed the already-stale mb-2026-11-03/04/05 this run. Verified idempotent (dry-run deletes none today).

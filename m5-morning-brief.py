@@ -1066,6 +1066,45 @@ def generate_feed_xml(episodes_to_include):
     return raw_xml
 
 
+def prune_old_releases():
+    """Delete mb-YYYY-MM-DD GitHub releases strictly older than 7 days.
+
+    Keeps the rolling back-catalog the feed references (the 7 newest releases,
+    i.e. within the last 7 days) and removes anything older. Only tags matching
+    mb-YYYY-MM-DD are ever touched, so no other release is affected. This never
+    deletes a release the feed links to (the feed only lists the 7 newest).
+    """
+    import subprocess as sp
+    repo = "ronyoder31-maker/M5-Morning-Brief"
+    today = datetime.date.today()
+    cutoff = today - datetime.timedelta(days=7)  # strictly older than this is pruned
+    r = sp.run(["gh", "release", "list", "-R", repo, "--limit", "60",
+                "--json", "tagName"], capture_output=True, text=True)
+    if r.returncode != 0 or not r.stdout.strip():
+        log(f"WARNING: gh release list failed for pruning ({r.returncode}): {r.stderr.strip()[:200]}")
+        return
+    try:
+        rels = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        log("WARNING: could not parse gh release list JSON for pruning")
+        return
+    for rel in rels:
+        tag = rel.get("tagName", "")
+        if not re.fullmatch(r"mb-\d{4}-\d{2}-\d{2}", tag):
+            continue
+        try:
+            rel_date = datetime.date.fromisoformat(tag[3:])
+        except ValueError:
+            continue
+        if rel_date < cutoff:
+            dr = sp.run(["gh", "release", "delete", tag, "-R", repo, "--yes"],
+                        capture_output=True, text=True)
+            if dr.returncode == 0:
+                log(f"Pruned old release {tag} ({(today - rel_date).days} days old)")
+            else:
+                log(f"WARNING: failed to delete release {tag}: {dr.stderr.strip()[:150]}")
+
+
 def get_last_7_episodes():
     """Back catalog for the feed: the 7 newest mb-YYYY-MM-DD releases on GitHub.
 
@@ -1345,6 +1384,13 @@ def run_pipeline():
     if publish_ok and os.path.isdir(stage_folder):
         shutil.rmtree(stage_folder, ignore_errors=True)
         log(f"Removed staging folder: {stage_folder}")
+
+    # 9b. Prune GitHub releases strictly older than 7 days (keeps the feed's back-catalog)
+    if publish_ok:
+        try:
+            prune_old_releases()
+        except Exception as e:
+            fail(f"Release pruning error: {e}", "release_prune")
 
     # 10. Final verification
     log("")
